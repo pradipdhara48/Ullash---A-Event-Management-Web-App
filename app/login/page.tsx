@@ -2,8 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
-import { Flower2, ShieldCheck, Users, ArrowRight, Lock, Mail } from 'lucide-react'
+import { Flower2, KeyRound, Mail, ShieldCheck, Users, ArrowRight, X, CheckCircle2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 export default function LoginPage() {
@@ -11,186 +10,249 @@ export default function LoginPage() {
   const [role, setRole] = useState<'admin' | 'staff'>('admin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [errorMsg, setErrorMsg] = useState('')
+  const [errorMessage, setErrorMessage] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // Forgot Password Modal State
+  const [showForgotModal, setShowForgotModal] = useState(false)
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [forgotMessage, setForgotMessage] = useState('')
+  const [forgotError, setForgotError] = useState('')
+  const [forgotLoading, setForgotLoading] = useState(false)
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    setErrorMsg('')
+    setErrorMessage('')
     setLoading(true)
 
-    try {
-      if (role === 'admin') {
-        // Admin default verification
-        if (email.trim() === 'admin@ullash.com' && password === 'admin') {
-          localStorage.setItem(
-            'ullash_current_user',
-            JSON.stringify({ role: 'admin', email: email.trim(), name: 'Admin' })
-          )
-          router.push('/')
-        } else {
-          setErrorMsg('Invalid Admin credentials! (Default: admin@ullash.com / admin)')
-        }
-      } else {
-        // Staff check from Supabase database
-        const { data, error } = await supabase
-          .from('staff')
-          .select('*')
-          .eq('email', email.trim().toLowerCase())
-          .eq('password', password)
-          .single()
+    const cleanEmail = email.trim().toLowerCase()
 
-        if (error || !data) {
-          setErrorMsg('Invalid Staff email or password!')
-        } else {
-          localStorage.setItem(
-            'ullash_current_user',
-            JSON.stringify({ role: 'staff', email: data.email, name: data.name })
-          )
-          router.push('/')
-        }
+    const { data: user, error } = await supabase
+      .from('staff')
+      .select('*')
+      .eq('email', cleanEmail)
+      .eq('password', password)
+      .eq('role', role)
+      .single()
+
+    if (error || !user) {
+      setErrorMessage(`Invalid ${role === 'admin' ? 'Admin' : 'Staff'} credentials! Please check your email and password.`)
+      setLoading(false)
+      return
+    }
+
+    if (user.is_suspended) {
+      setErrorMessage('Your account has been suspended. Please contact the administrator.')
+      setLoading(false)
+      return
+    }
+
+    localStorage.setItem(
+      'ullash_current_user',
+      JSON.stringify({
+        id: user.id,
+        role: user.role,
+        email: user.email,
+        name: user.name || (role === 'admin' ? 'Admin' : 'Staff Member'),
+      })
+    )
+
+    router.push('/')
+  }
+
+  // Real Backend API call kore email pathanor handler
+  const handleSendResetEmail = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setForgotLoading(true)
+    setForgotMessage('')
+    setForgotError('')
+
+    const cleanEmail = forgotEmail.trim().toLowerCase()
+
+    try {
+      const res = await fetch('/api/send-reset-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        setForgotError(data.error || 'Failed to send reset email.')
+      } else {
+        setForgotMessage(`A secure password reset link has been sent to ${cleanEmail}. Please check your email inbox or spam folder.`)
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Login failed')
-    } finally {
-      setLoading(false)
+      setForgotError('Network error: ' + err.message)
     }
+
+    setForgotLoading(false)
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f7f8fa] px-4 py-12 text-slate-900">
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <div className="inline-flex items-center gap-2">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">
-              <Flower2 size={20} />
-            </div>
-            <span className="text-2xl font-bold tracking-tight text-slate-950">Ullash</span>
+    <main className="min-h-screen bg-[#f7f8fa] text-slate-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white rounded-3xl p-8 shadow-xl border border-slate-200">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="flex size-10 items-center justify-center rounded-2xl bg-slate-900 text-white">
+            <Flower2 size={20} />
           </div>
-          <h2 className="mt-4 text-xl font-bold tracking-tight text-slate-900">
-            {role === 'admin' ? 'Admin Portal Login' : 'Staff Portal Login'}
-          </h2>
-          <p className="mt-1 text-xs text-slate-500">
-            {role === 'admin'
-              ? 'Log in to manage full events, finances, and staff members'
-              : 'Log in with credentials provided by your event administrator'}
-          </p>
+          <div>
+            <h2 className="text-xl font-bold tracking-tight text-slate-950">Ullash Portal</h2>
+            <p className="text-xs text-slate-400 font-medium">Event & Budget Workspace</p>
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
-          <div className="mb-6 flex items-center gap-3 rounded-xl bg-slate-50 p-3 border border-slate-100">
-            <div
-              className={`flex size-9 items-center justify-center rounded-lg ${
-                role === 'admin' ? 'bg-slate-900 text-white' : 'bg-emerald-600 text-white'
-              }`}
-            >
-              {role === 'admin' ? <ShieldCheck size={18} /> : <Users size={18} />}
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-800">
-                Current Role: <span className="capitalize">{role}</span>
-              </p>
-              <p className="text-[11px] text-slate-400">
-                {role === 'admin' ? 'Full administrative access' : 'Staff operations access'}
-              </p>
+        {/* Role Switcher */}
+        <div className="grid grid-cols-2 gap-2 bg-slate-50 p-1.5 rounded-2xl mb-6 border border-slate-100">
+          <button
+            type="button"
+            onClick={() => { setRole('admin'); setErrorMessage(''); }}
+            className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition ${role === 'admin' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
+          >
+            <ShieldCheck size={15} /> Admin Portal
+          </button>
+          <button
+            type="button"
+            onClick={() => { setRole('staff'); setErrorMessage(''); }}
+            className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition ${role === 'staff' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
+          >
+            <Users size={15} /> Staff Portal
+          </button>
+        </div>
+
+        {errorMessage && (
+          <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-medium text-rose-600">
+            {errorMessage}
+          </div>
+        )}
+
+        <form onSubmit={handleLogin} className="space-y-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-700 block mb-1.5 capitalize">
+              {role} Email
+            </label>
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 focus-within:border-slate-500 transition">
+              <Mail size={16} className="text-slate-400 shrink-0" />
+              <input
+                required
+                type="email"
+                placeholder={role === 'admin' ? 'admin@ullash.com' : 'staff@ullash.com'}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full text-sm text-slate-900 placeholder:text-slate-400 bg-transparent outline-none font-medium"
+              />
             </div>
           </div>
 
-          {errorMsg && (
-            <div className="mb-4 rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-600 border border-rose-100">
-              {errorMsg}
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} className="flex flex-col gap-4">
-            <div>
-              <label className="text-xs font-semibold text-slate-600">
-                {role === 'admin' ? 'Admin Email' : 'Staff Email'}
-              </label>
-              <div className="relative mt-1">
-                <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                  <Mail size={16} />
-                </span>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder={role === 'admin' ? 'admin@ullash.com' : 'staff@example.com'}
-                  className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-slate-900"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-slate-600">Password</label>
-              <div className="relative mt-1">
-                <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                  <Lock size={16} />
-                </span>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-slate-900"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-50"
-            >
-              {loading ? 'Signing in...' : `Sign In as ${role === 'admin' ? 'Admin' : 'Staff'}`}
-              <ArrowRight size={16} />
-            </button>
-          </form>
-
-          <div className="mt-6 border-t border-slate-100 pt-5">
-            <p className="mb-3 text-center text-xs font-medium text-slate-400">
-              Switch login portal:
-            </p>
-            <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-slate-700">Password</label>
               <button
                 type="button"
                 onClick={() => {
-                  setRole('admin')
-                  setErrorMsg('')
-                  setEmail('')
-                  setPassword('')
+                  setForgotEmail(email);
+                  setForgotMessage('');
+                  setForgotError('');
+                  setShowForgotModal(true);
                 }}
-                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition ${
-                  role === 'admin'
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
+                className="text-xs font-semibold text-blue-600 hover:underline"
               >
-                <ShieldCheck size={14} /> Admin Login
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setRole('staff')
-                  setErrorMsg('')
-                  setEmail('')
-                  setPassword('')
-                }}
-                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition ${
-                  role === 'staff'
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <Users size={14} /> Staff Login
+                Forgot Password?
               </button>
             </div>
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 focus-within:border-slate-500 transition">
+              <KeyRound size={16} className="text-slate-400 shrink-0" />
+              <input
+                required
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full text-sm text-slate-900 placeholder:text-slate-400 bg-transparent outline-none font-medium"
+              />
+            </div>
           </div>
-        </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition flex items-center justify-center gap-2"
+          >
+            {loading ? 'Verifying...' : `Sign In as ${role === 'admin' ? 'Admin' : 'Staff'}`}
+            <ArrowRight size={16} />
+          </button>
+        </form>
       </div>
-    </div>
+
+      {/* Forgot Password Modal (Safe Email Delivery Only) */}
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Reset Password</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Enter your email to receive a password reset link.</p>
+              </div>
+              <button onClick={() => setShowForgotModal(false)} className="rounded-full p-1 text-slate-400 hover:bg-slate-100">
+                <X size={18} />
+              </button>
+            </div>
+
+            {forgotError && (
+              <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-600 font-medium">
+                {forgotError}
+              </div>
+            )}
+
+            {forgotMessage ? (
+              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-5 text-center space-y-2">
+                <CheckCircle2 size={32} className="mx-auto text-emerald-600" />
+                <h4 className="font-bold text-slate-900 text-sm">Email Sent!</h4>
+                <p className="text-xs text-slate-600 leading-relaxed">{forgotMessage}</p>
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(false)}
+                  className="mt-3 w-full rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleSendResetEmail} className="space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Registered Email</label>
+                  <input
+                    required
+                    type="email"
+                    placeholder="your-email@gmail.com"
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-slate-500 font-medium"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotModal(false)}
+                    className="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="flex-1 rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition"
+                  >
+                    {forgotLoading ? 'Sending...' : 'Send Reset Link'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+    </main>
   )
 }

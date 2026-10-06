@@ -160,4 +160,17 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* নম্বর ইনপুট থেকে আপ/ডাউন স্পিনার অ্যারো বন্ধ করার নিয়ম */
+  /* Chrome, Safari, Edge, Opera */
+  input::-webkit-outer-spin-button,
+  input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  /* Firefox */
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
 }
