@@ -2,12 +2,7 @@ import { NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
-
-const resend = new Resend(process.env.RESEND_API_KEY)
+export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +13,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Email address is required.' }, { status: 400 })
     }
 
-    // ১. চেক করা ইউজার staff টেবিলে আছে কিনা
+    // ১. Supabase ক্লায়েন্ট তৈরি
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://eocrmcchmroxrhffoqen.supabase.co',
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_HdcqShfRCNpaN8Dnf8mdfA_8JSBPjih'
+    )
+
+    // ২. চেক করা ইউজার staff টেবিলে আছে কিনা
     const { data: user, error: userError } = await supabase
       .from('staff')
       .select('id, email, name')
@@ -32,10 +33,14 @@ export async function POST(request: Request) {
       )
     }
 
+    // ৩. Resend ইনস্ট্যান্স ফাংশনের ভেতর তৈরি (যাতে বিল্ড টাইমে ক্র্যাশ না করে)
+    const apiKey = process.env.RESEND_API_KEY || 're_U1XqBYph_Kp6RvaovGmRALzDx8juwX491'
+    const resend = new Resend(apiKey)
+
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
     const resetLink = `${siteUrl}/reset-password?email=${encodeURIComponent(cleanEmail)}&token=${user.id}`
 
-    // ২. Resend দিয়ে সরাসরি ইমেইল পাঠানো (গুগলের কোনো ব্লক ছাড়া)
+    // ৪. ইমেইল সেন্ড করা
     const { error: sendError } = await resend.emails.send({
       from: 'Ullash Portal <onboarding@resend.dev>',
       to: [cleanEmail],
