@@ -3,8 +3,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Wedora — Wedding Management',
-  description: 'Plan events, manage vendors, and keep every wedding payment on track.',
+  title: 'Ullash — Event Management Web App',
+  description: 'An all-inclusive Event Management Web Application for coordinating various event types with team collaboration, budget tracking, and task management.',
   generator: 'v0.app',
   icons: {
     icon: [
