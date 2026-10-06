@@ -9,7 +9,7 @@ import {
   CalendarDays,
   CircleDollarSign,
   ClipboardList,
-  Coins,
+  Clock,
   Eye,
   Flower2,
   Globe,
@@ -18,6 +18,7 @@ import {
   LogOut,
   Mail,
   Menu,
+  MoreHorizontal,
   Plus,
   Receipt,
   Settings,
@@ -44,6 +45,9 @@ interface ExpenseItem {
   vendor: string
   total: number
   advance: number
+  unit?: string
+  quantity?: number
+  rate_per_unit?: number
 }
 
 interface ExpenseLog {
@@ -84,6 +88,7 @@ interface DeletionRequest {
   created_at: string
 }
 
+// আগের ক্যাটাগরিগুলোর সাথে শুধু 'Others' যুক্ত করা হয়েছে
 const expenseCategories = [
   { name: 'Decorations', icon: Flower2, color: 'bg-rose-100 text-rose-700' },
   { name: 'Venue', icon: LayoutDashboard, color: 'bg-sky-100 text-sky-700' },
@@ -91,6 +96,17 @@ const expenseCategories = [
   { name: 'Catering / Food Stalls', icon: UtensilsCrossed, color: 'bg-amber-100 text-amber-700' },
   { name: 'Groceries', icon: ClipboardList, color: 'bg-emerald-100 text-emerald-700' },
   { name: 'Vegetables', icon: Flower2, color: 'bg-lime-100 text-lime-700' },
+  { name: 'Others', icon: MoreHorizontal, color: 'bg-slate-100 text-slate-700' },
+]
+
+const unitOptions = [
+  { label: 'Pcs (Piece)', value: 'pcs' },
+  { label: 'Kg (Kilogram)', value: 'kg' },
+  { label: 'Plate', value: 'plate' },
+  { label: 'Litre', value: 'litre' },
+  { label: 'Packet', value: 'packet' },
+  { label: 'Box', value: 'box' },
+  { label: 'Fixed (Lump sum)', value: 'fixed' },
 ]
 
 const eventCategories = ['Wedding', 'Birthday Party', 'Annaprashan', 'Corporate Event', 'Other']
@@ -138,6 +154,11 @@ export default function Page() {
   const [newItemAdvance, setNewItemAdvance] = useState('')
   const [newItemCategory, setNewItemCategory] = useState('Decorations')
 
+  // Unit, Quantity & Rate
+  const [newItemUnit, setNewItemUnit] = useState('pcs')
+  const [newItemQuantity, setNewItemQuantity] = useState<number | ''>(1)
+  const [newItemRate, setNewItemRate] = useState<number | ''>('')
+
   // Ledger Modal States
   const [selectedExpenseForLedger, setSelectedExpenseForLedger] = useState<ExpenseItem | null>(null)
   const [expenseLogs, setExpenseLogs] = useState<ExpenseLog[]>([])
@@ -175,6 +196,23 @@ export default function Page() {
   const formatMoney = (value: number) => {
     return `${currentCurrency.symbol}${Number(value || 0).toLocaleString(currentCurrency.locale)}`
   }
+
+  // Auto Calculation: Quantity * Rate = Total Cost
+  useEffect(() => {
+    if (newItemUnit === 'fixed') return
+    const q = Number(newItemQuantity) || 0
+    const r = Number(newItemRate) || 0
+    if (newItemQuantity !== '' && newItemRate !== '') {
+      setNewItemCost(String(q * r))
+    }
+  }, [newItemQuantity, newItemRate, newItemUnit])
+
+  // Advance বাদ দিয়ে লাইভ ডিউ হিসাব
+  const calculatedDue = useMemo(() => {
+    const total = Number(newItemCost) || 0
+    const adv = Number(newItemAdvance) || 0
+    return Math.max(0, total - adv)
+  }, [newItemCost, newItemAdvance])
 
   const fetchData = async () => {
     const { data: expensesData } = await supabase
@@ -269,14 +307,19 @@ export default function Page() {
 
     const totalVal = Number(newItemCost) || 0
     const advVal = Number(newItemAdvance) || 0
+    const qtyVal = Number(newItemQuantity) || 1
+    const rateVal = Number(newItemRate) || 0
 
-    const newExpense = {
+    const newExpense: any = {
       event_id: targetedEvent.id,
       category: newItemCategory,
       item: newItemName,
       vendor: currentUser?.name || 'General Vendor',
       total: totalVal,
       advance: advVal,
+      unit: newItemUnit,
+      quantity: qtyVal,
+      rate_per_unit: rateVal,
     }
 
     const { data, error } = await supabase.from('expenses').insert([newExpense]).select()
@@ -290,7 +333,9 @@ export default function Page() {
           expense_id: createdItem.id,
           amount: totalVal,
           type: 'cost_added',
-          note: 'Opening Budget / Agreed Cost',
+          note: newItemUnit !== 'fixed' && rateVal > 0 
+            ? `${qtyVal} ${newItemUnit} @ ${formatMoney(rateVal)}/${newItemUnit}`
+            : 'Opening Budget / Agreed Cost',
         })
       }
       if (advVal > 0) {
@@ -309,6 +354,9 @@ export default function Page() {
       setNewItemName('')
       setNewItemCost('')
       setNewItemAdvance('')
+      setNewItemQuantity(1)
+      setNewItemRate('')
+      setNewItemUnit('pcs')
       setNewItemCategory('Decorations')
       setShowAddItem(false)
     } else {
@@ -596,7 +644,6 @@ export default function Page() {
     return new Date(until).getTime() > Date.now()
   }
 
-  // Save Credentials er ager step - Re-confirmation popup open kora
   const handleInitiateUpdateAdmin = (e: React.FormEvent) => {
     e.preventDefault()
     if (!isAdmin) return
@@ -607,7 +654,6 @@ export default function Page() {
     setShowConfirmCredentialModal(true)
   }
 
-  // Confirm korar por database-e save kora
   const handleConfirmUpdateAdmin = async () => {
     setCredentialUpdating(true)
     const updates: any = {}
@@ -694,7 +740,6 @@ export default function Page() {
             </button>
           )}
 
-          {/* Compact Admin Card with Gear Menu */}
           <div className="relative rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -716,7 +761,6 @@ export default function Page() {
                   <Settings size={15} />
                 </button>
 
-                {/* Dropdown Menu on Gear Click */}
                 {showAdminMenu && (
                   <div className="absolute bottom-full right-0 mb-2 w-48 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl z-50">
                     {isAdmin && (
@@ -836,6 +880,7 @@ export default function Page() {
                         <thead className="bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                           <tr>
                             <th className="px-5 py-3">Expense item</th>
+                            <th className="px-5 py-3">Qty & Rate</th>
                             <th className="px-5 py-3">Total cost</th>
                             <th className="px-5 py-3">Advance paid</th>
                             <th className="px-5 py-3">Due balance</th>
@@ -845,7 +890,7 @@ export default function Page() {
                         <tbody className="divide-y divide-slate-100">
                           {filteredItems.length === 0 ? (
                             <tr>
-                              <td colSpan={5} className="px-5 py-6 text-center text-xs text-slate-400">
+                              <td colSpan={6} className="px-5 py-6 text-center text-xs text-slate-400">
                                 No expenses logged for this event. Click &ldquo;Add Expense to Event&rdquo; above!
                               </td>
                             </tr>
@@ -871,6 +916,13 @@ export default function Page() {
                                         <p className="mt-0.5 text-xs text-slate-400">{item.category} · {item.vendor}</p>
                                       </div>
                                     </div>
+                                  </td>
+                                  <td className="px-5 py-4 text-xs text-slate-500 font-medium">
+                                    {item.quantity && item.rate_per_unit ? (
+                                      <span>{item.quantity} {item.unit || 'pcs'} × {formatMoney(item.rate_per_unit)}</span>
+                                    ) : (
+                                      <span className="text-slate-400">Fixed</span>
+                                    )}
                                   </td>
                                   <td className="px-5 py-4 font-medium text-slate-600">{formatMoney(item.total)}</td>
                                   <td className="px-5 py-4 font-medium text-emerald-600">{formatMoney(item.advance)}</td>
@@ -1000,6 +1052,7 @@ export default function Page() {
                     <thead className="bg-slate-50 text-[11px] font-bold uppercase text-slate-400">
                       <tr>
                         <th className="px-5 py-3">Expense item</th>
+                        <th className="px-5 py-3">Qty & Rate</th>
                         <th className="px-5 py-3">Total cost</th>
                         <th className="px-5 py-3">Advance paid</th>
                         <th className="px-5 py-3">Due balance</th>
@@ -1009,7 +1062,7 @@ export default function Page() {
                     <tbody className="divide-y divide-slate-100">
                       {filteredItems.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="p-6 text-center text-xs text-slate-400">
+                          <td colSpan={6} className="p-6 text-center text-xs text-slate-400">
                             No expenses logged for this event. Click &ldquo;Add Expense&rdquo; above!
                           </td>
                         </tr>
@@ -1023,6 +1076,13 @@ export default function Page() {
                               onClick={() => openKhatabookLedger(item)}
                             >
                               <td className="px-5 py-4 font-semibold text-slate-800">{item.item}</td>
+                              <td className="px-5 py-4 text-xs text-slate-500">
+                                {item.quantity && item.rate_per_unit ? (
+                                  <span>{item.quantity} {item.unit || 'pcs'} × {formatMoney(item.rate_per_unit)}</span>
+                                ) : (
+                                  <span>Fixed</span>
+                                )}
+                              </td>
                               <td className="px-5 py-4">{formatMoney(item.total)}</td>
                               <td className="px-5 py-4 text-emerald-600 font-medium">{formatMoney(item.advance)}</td>
                               <td className="px-5 py-4 font-bold text-rose-600">{formatMoney(balance)}</td>
@@ -1527,7 +1587,7 @@ export default function Page() {
               <label className="text-xs font-semibold text-slate-600">
                 Note / Description (Optional)
                 <input
-                  placeholder={activeActionType === 'cost_added' ? 'e.g. Extra 20 chairs added' : 'e.g. Paid via UPI / Cash'}
+                  placeholder={activeActionType === 'cost_added' ? 'e.g. Extra 20 items added' : 'e.g. Paid via UPI / Cash'}
                   value={transactionNote}
                   onChange={(e) => setTransactionNote(e.target.value)}
                   className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-slate-500 font-medium"
@@ -1630,62 +1690,130 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL 3: ADD EXPENSE */}
+      {/* MODAL 3: ADD EXPENSE WITH UNIT & AUTO CALCULATION */}
       {showAddItem && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-5 flex items-start justify-between">
               <div>
-                <h2 className="text-lg font-bold">Add Expense to {targetedEvent?.name}</h2>
-                <p className="mt-1 text-xs text-slate-500">Record to this event ledger.</p>
+                <h2 className="text-lg font-bold text-slate-900">Add Expense to {targetedEvent?.name}</h2>
+                <p className="mt-1 text-xs text-slate-500">Auto calculation with unit & rate per unit.</p>
               </div>
               <button onClick={() => setShowAddItem(false)} aria-label="Close"><X size={18} /></button>
             </div>
+
             <form className="flex flex-col gap-4" onSubmit={handleAddItem}>
-              <label className="text-xs font-semibold text-slate-600">
-                Item Name
-                <input
-                  required
-                  value={newItemName}
-                  onChange={(e) => setNewItemName(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                  placeholder="e.g. Chhayabani Reception Hall"
-                />
-              </label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="text-xs font-semibold text-slate-600">
-                  Total Agreed Budget ({currentCurrency.symbol})
+                  Item Name
+                  <input
+                    required
+                    value={newItemName}
+                    onChange={(e) => setNewItemName(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
+                    placeholder="e.g. Sweet / Rasgulla / Hall"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Category
+                  <select
+                    value={newItemCategory}
+                    onChange={(e) => setNewItemCategory(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
+                  >
+                    {expenseCategories.map((cat) => (
+                      <option key={cat.name} value={cat.name}>{cat.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {/* Unit, Quantity, Rate per unit */}
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Unit
+                  <select
+                    value={newItemUnit}
+                    onChange={(e) => setNewItemUnit(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium outline-none"
+                  >
+                    {unitOptions.map((u) => (
+                      <option key={u.value} value={u.value}>{u.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Quantity ({newItemUnit})
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={newItemUnit === 'fixed'}
+                    value={newItemQuantity}
+                    onChange={(e) => setNewItemQuantity(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="e.g. 50"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Rate / {newItemUnit} ({currentCurrency.symbol})
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={newItemUnit === 'fixed'}
+                    value={newItemRate}
+                    onChange={(e) => setNewItemRate(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="e.g. 15"
+                  />
+                </label>
+              </div>
+
+              {/* Total & Advance Paid */}
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Total Cost ({currentCurrency.symbol})
                   <input
                     required
                     type="number"
                     value={newItemCost}
                     onChange={(e) => setNewItemCost(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none font-medium"
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-bold bg-slate-50"
+                    placeholder="0"
                   />
                 </label>
                 <label className="text-xs font-semibold text-slate-600">
-                  Initial Advance Paid ({currentCurrency.symbol})
+                  Advance Paid ({currentCurrency.symbol})
                   <input
                     type="number"
+                    min="0"
                     value={newItemAdvance}
                     onChange={(e) => setNewItemAdvance(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none font-medium"
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium text-emerald-600"
+                    placeholder="0"
                   />
                 </label>
               </div>
-              <label className="text-xs font-semibold text-slate-600">
-                Category
-                <select
-                  value={newItemCategory}
-                  onChange={(e) => setNewItemCategory(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
-                >
-                  {expenseCategories.map((cat) => (
-                    <option key={cat.name} value={cat.name}>{cat.name}</option>
-                  ))}
-                </select>
-              </label>
-              <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition">
+
+              {/* Calculation Preview Banner */}
+              <div className="flex items-center justify-between rounded-xl bg-slate-50 p-3 border border-slate-100 text-xs">
+                <div>
+                  <span className="text-slate-400 font-medium block">Total Cost:</span>
+                  <span className="text-sm font-bold text-slate-800">{formatMoney(Number(newItemCost) || 0)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-400 font-medium block">Due Balance:</span>
+                  <span className={`text-sm font-bold ${calculatedDue > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {formatMoney(calculatedDue)}
+                  </span>
+                </div>
+              </div>
+
+              <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition shadow-sm">
                 Save Expense
               </button>
             </form>
