@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Flower2, ShieldCheck, Users, ArrowRight, Lock, Mail } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -11,47 +12,48 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    // Default admin demo credentials
-    if (!localStorage.getItem('ullash_admin')) {
-      localStorage.setItem(
-        'ullash_admin',
-        JSON.stringify({ email: 'admin@ullash.com', password: 'admin' })
-      )
-    }
-  }, [])
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setErrorMsg('')
+    setLoading(true)
 
-    if (role === 'admin') {
-      const storedAdmin = JSON.parse(localStorage.getItem('ullash_admin') || '{"email":"admin@ullash.com","password":"admin"}')
-      if (email.trim() === storedAdmin.email && password === storedAdmin.password) {
-        localStorage.setItem(
-          'ullash_current_user',
-          JSON.stringify({ role: 'admin', email: email.trim(), name: 'Admin User' })
-        )
-        router.push('/')
+    try {
+      if (role === 'admin') {
+        // Admin default verification
+        if (email.trim() === 'admin@ullash.com' && password === 'admin') {
+          localStorage.setItem(
+            'ullash_current_user',
+            JSON.stringify({ role: 'admin', email: email.trim(), name: 'Admin' })
+          )
+          router.push('/')
+        } else {
+          setErrorMsg('Invalid Admin credentials! (Default: admin@ullash.com / admin)')
+        }
       } else {
-        setErrorMsg('Invalid Admin credentials! (Default: admin@ullash.com / admin)')
-      }
-    } else {
-      const staffList = JSON.parse(localStorage.getItem('ullash_staff_list') || '[]')
-      const matchedStaff = staffList.find(
-        (s: any) => s.email.toLowerCase() === email.trim().toLowerCase() && s.password === password
-      )
+        // Staff check from Supabase database
+        const { data, error } = await supabase
+          .from('staff')
+          .select('*')
+          .eq('email', email.trim().toLowerCase())
+          .eq('password', password)
+          .single()
 
-      if (matchedStaff) {
-        localStorage.setItem(
-          'ullash_current_user',
-          JSON.stringify({ role: 'staff', email: matchedStaff.email, name: matchedStaff.name })
-        )
-        router.push('/')
-      } else {
-        setErrorMsg('Invalid Staff credentials or account not yet created by Admin!')
+        if (error || !data) {
+          setErrorMsg('Invalid Staff email or password!')
+        } else {
+          localStorage.setItem(
+            'ullash_current_user',
+            JSON.stringify({ role: 'staff', email: data.email, name: data.name })
+          )
+          router.push('/')
+        }
       }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Login failed')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -139,9 +141,10 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+              disabled={loading}
+              className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-50"
             >
-              Sign In as {role === 'admin' ? 'Admin' : 'Staff'}
+              {loading ? 'Signing in...' : `Sign In as ${role === 'admin' ? 'Admin' : 'Staff'}`}
               <ArrowRight size={16} />
             </button>
           </form>

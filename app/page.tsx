@@ -13,16 +13,26 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  MoreHorizontal,
   Plus,
   Search,
   Settings,
   ShieldCheck,
+  Trash2,
   UserPlus,
   Users,
   UtensilsCrossed,
   X,
 } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
+
+interface ExpenseItem {
+  id?: string
+  category: string
+  item: string
+  vendor: string
+  total: number
+  advance: number
+}
 
 const categories = [
   { name: 'Decorations', icon: Flower2, color: 'bg-rose-100 text-rose-700' },
@@ -33,16 +43,7 @@ const categories = [
   { name: 'Vegetables', icon: Flower2, color: 'bg-lime-100 text-lime-700' },
 ]
 
-const initialItems = [
-  { category: 'Decorations', item: 'Mandap & stage floral arrangement', vendor: 'Petal & Stem Co.', total: 18500, advance: 12000 },
-  { category: 'Venue', item: 'The Willow Garden', vendor: 'Willow Garden Estate', total: 85000, advance: 50000 },
-  { category: 'Catering / Food Stalls', item: 'Main buffet & live food counters', vendor: 'Saffron Table', total: 64000, advance: 64000 },
-  { category: 'Stationery', item: 'Invitation suite · 120 sets', vendor: 'Paper & Press', total: 9600, advance: 4800 },
-  { category: 'Groceries', item: 'Pantry essentials', vendor: 'Metro Wholesale', total: 12400, advance: 8000 },
-  { category: 'Vegetables', item: 'Fresh produce · 3 days', vendor: 'Green Basket Market', total: 7800, advance: 4200 },
-]
-
-const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
+const money = (value: number) => `₹${Number(value || 0).toLocaleString('en-IN')}`
 
 export default function Page() {
   const router = useRouter()
@@ -53,18 +54,39 @@ export default function Page() {
   const [showMobileNav, setShowMobileNav] = useState(false)
   const [showAddItem, setShowAddItem] = useState(false)
   const [showAddStaffModal, setShowAddStaffModal] = useState(false)
-  const [items, setItems] = useState(initialItems)
+  const [items, setItems] = useState<ExpenseItem[]>([])
 
-  // Expense form state
+  // Form states
   const [newItemName, setNewItemName] = useState('')
   const [newItemCost, setNewItemCost] = useState('')
+  const [newItemAdvance, setNewItemAdvance] = useState('')
   const [newItemCategory, setNewItemCategory] = useState('Decorations')
 
-  // Staff creation form state
+  // Staff creation form states
   const [staffName, setStaffName] = useState('')
   const [staffEmail, setStaffEmail] = useState('')
   const [staffPassword, setStaffPassword] = useState('')
-  const [staffList, setStaffList] = useState<any[]>([])
+  const [staffCount, setStaffCount] = useState(0)
+
+  // Fetch initial data from Supabase
+  const fetchData = async () => {
+    // 1. Fetch expenses
+    const { data: expensesData } = await supabase
+      .from('expenses')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (expensesData) {
+      setItems(expensesData)
+    }
+
+    // 2. Fetch staff count
+    const { count } = await supabase
+      .from('staff')
+      .select('*', { count: 'exact', head: true })
+
+    if (count !== null) setStaffCount(count)
+  }
 
   useEffect(() => {
     const user = localStorage.getItem('ullash_current_user')
@@ -72,8 +94,7 @@ export default function Page() {
       router.push('/login')
     } else {
       setCurrentUser(JSON.parse(user))
-      const savedStaff = JSON.parse(localStorage.getItem('ullash_staff_list') || '[]')
-      setStaffList(savedStaff)
+      fetchData()
       setLoading(false)
     }
   }, [router])
@@ -83,45 +104,85 @@ export default function Page() {
     router.push('/login')
   }
 
-  const handleAddItem = (e: React.FormEvent) => {
+  // Add new expense to Supabase
+  const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newItemName || !newItemCost) return
 
-    setItems((prev) => [
-      {
-        category: newItemCategory,
-        item: newItemName,
-        vendor: currentUser?.name || 'Assigned Vendor',
-        total: Number(newItemCost) || 0,
-        advance: 0,
-      },
-      ...prev,
-    ])
+    const newExpense = {
+      category: newItemCategory,
+      item: newItemName,
+      vendor: currentUser?.name || 'General Vendor',
+      total: Number(newItemCost) || 0,
+      advance: Number(newItemAdvance) || 0,
+    }
 
-    setNewItemName('')
-    setNewItemCost('')
-    setNewItemCategory('Decorations')
-    setShowAddItem(false)
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert([newExpense])
+      .select()
+
+    if (!error && data) {
+      setItems((prev) => [data[0], ...prev])
+      setNewItemName('')
+      setNewItemCost('')
+      setNewItemAdvance('')
+      setNewItemCategory('Decorations')
+      setShowAddItem(false)
+    } else {
+      alert('Error saving expense: ' + error?.message)
+    }
   }
 
-  const handleCreateStaff = (e: React.FormEvent) => {
+  // Delete expense from Supabase
+  const handleDeleteItem = async (id?: string) => {
+    if (!id) return
+    const confirmDelete = confirm('Are you sure you want to delete this item?')
+    if (!confirmDelete) return
+
+    const { error } = await supabase.from('expenses').delete().eq('id', id)
+    if (!error) {
+      setItems((prev) => prev.filter((item) => item.id !== id))
+    } else {
+      alert('Error deleting item: ' + error.message)
+    }
+  }
+
+  // Create Staff in Supabase
+  const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!staffName || !staffEmail || !staffPassword) return
 
-    const newStaff = { name: staffName, email: staffEmail, password: staffPassword }
-    const updated = [...staffList, newStaff]
-    setStaffList(updated)
-    localStorage.setItem('ullash_staff_list', JSON.stringify(updated))
+    const { error } = await supabase.from('staff').insert([
+      {
+        name: staffName,
+        email: staffEmail.toLowerCase().trim(),
+        password: staffPassword,
+        role: 'staff',
+      },
+    ])
 
-    setStaffName('')
-    setStaffEmail('')
-    setStaffPassword('')
-    setShowAddStaffModal(false)
-    alert(`Staff ${staffName} successfully added! They can now log in.`)
+    if (!error) {
+      alert(`Staff ${staffName} successfully added!`)
+      setStaffName('')
+      setStaffEmail('')
+      setStaffPassword('')
+      setShowAddStaffModal(false)
+      fetchData()
+    } else {
+      alert('Error creating staff: ' + error.message)
+    }
   }
 
   const totals = useMemo(
-    () => items.reduce((acc, item) => ({ total: acc.total + item.total, advance: acc.advance + item.advance }), { total: 0, advance: 0 }),
+    () =>
+      items.reduce(
+        (acc, item) => ({
+          total: acc.total + Number(item.total || 0),
+          advance: acc.advance + Number(item.advance || 0),
+        }),
+        { total: 0, advance: 0 }
+      ),
     [items]
   )
   const due = totals.total - totals.advance
@@ -160,7 +221,7 @@ export default function Page() {
             >
               <Users size={17} /> Staff members
               <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-600">
-                {staffList.length}
+                {staffCount}
               </span>
             </button>
           )}
@@ -252,7 +313,7 @@ export default function Page() {
           </section>
 
           <section className="grid gap-4 sm:grid-cols-3">
-            <StatCard label="Total budget" value={money(totals.total)} helper="Across 6 categories" icon={<CircleDollarSign />} />
+            <StatCard label="Total budget" value={money(totals.total)} helper="Across all items" icon={<CircleDollarSign />} />
             <StatCard label="Paid so far" value={money(totals.advance)} helper={`${totals.total > 0 ? Math.round((totals.advance / totals.total) * 100) : 0}% of total budget`} icon={<ArrowUpRight />} />
             <StatCard label="Total due" value={money(due)} helper="Needs your attention" icon={<Bell />} danger />
           </section>
@@ -262,7 +323,7 @@ export default function Page() {
               <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="font-bold">Expense overview</h3>
-                  <p className="mt-1 text-xs text-slate-400">Track every commitment in one place</p>
+                  <p className="mt-1 text-xs text-slate-400">Track every commitment in Supabase</p>
                 </div>
                 <button className="flex items-center gap-2 self-start rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">This event <ChevronDown size={14} /></button>
               </div>
@@ -282,39 +343,53 @@ export default function Page() {
                       <th className="px-5 py-3">Total cost</th>
                       <th className="px-5 py-3">Advance paid</th>
                       <th className="px-5 py-3">Due balance</th>
-                      <th className="px-5 py-3"><span className="sr-only">Actions</span></th>
+                      <th className="px-5 py-3 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredItems.map((item) => {
-                      const balance = item.total - item.advance
-                      return (
-                        <tr key={item.item} className="transition hover:bg-slate-50/70">
-                          <td className="px-5 py-4">
-                            <div className="flex items-center gap-3">
-                              <div className={`flex size-9 items-center justify-center rounded-xl ${categories.find((category) => category.name === item.category)?.color}`}>
-                                <ClipboardList size={16} />
+                    {filteredItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-5 py-6 text-center text-xs text-slate-400">
+                          No expense items found. Add one above!
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredItems.map((item) => {
+                        const balance = Number(item.total) - Number(item.advance)
+                        return (
+                          <tr key={item.id || item.item} className="transition hover:bg-slate-50/70">
+                            <td className="px-5 py-4">
+                              <div className="flex items-center gap-3">
+                                <div className={`flex size-9 items-center justify-center rounded-xl ${categories.find((category) => category.name === item.category)?.color || 'bg-slate-100 text-slate-700'}`}>
+                                  <ClipboardList size={16} />
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-slate-700">{item.item}</p>
+                                  <p className="mt-0.5 text-xs text-slate-400">{item.category} · {item.vendor}</p>
+                                </div>
                               </div>
-                              <div>
-                                <p className="font-semibold text-slate-700">{item.item}</p>
-                                <p className="mt-0.5 text-xs text-slate-400">{item.category} · {item.vendor}</p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-5 py-4 font-medium text-slate-600">{money(item.total)}</td>
-                          <td className="px-5 py-4 font-medium text-emerald-600">{money(item.advance)}</td>
-                          <td className="px-5 py-4">
-                            <span className={`font-bold ${balance ? 'text-rose-600' : 'text-emerald-600'}`}>{money(balance)}</span>
-                            <span className={`ml-2 inline-flex rounded-full px-2 py-1 text-[10px] font-bold ${balance ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                              {balance ? 'Due' : 'Paid'}
-                            </span>
-                          </td>
-                          <td className="px-5 py-4 text-right">
-                            <button aria-label={`More actions for ${item.item}`} className="text-slate-300 hover:text-slate-600"><MoreHorizontal size={18} /></button>
-                          </td>
-                        </tr>
-                      )
-                    })}
+                            </td>
+                            <td className="px-5 py-4 font-medium text-slate-600">{money(item.total)}</td>
+                            <td className="px-5 py-4 font-medium text-emerald-600">{money(item.advance)}</td>
+                            <td className="px-5 py-4">
+                              <span className={`font-bold ${balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{money(balance)}</span>
+                              <span className={`ml-2 inline-flex rounded-full px-2 py-1 text-[10px] font-bold ${balance > 0 ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                {balance > 0 ? 'Due' : 'Paid'}
+                              </span>
+                            </td>
+                            <td className="px-5 py-4 text-right">
+                              <button
+                                onClick={() => handleDeleteItem(item.id)}
+                                title="Delete item"
+                                className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600 transition"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -365,7 +440,7 @@ export default function Page() {
             <div className="mb-5 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold">Add expense item</h2>
-                <p className="mt-1 text-xs text-slate-500">Record a new event commitment.</p>
+                <p className="mt-1 text-xs text-slate-500">Save to Supabase database.</p>
               </div>
               <button onClick={() => setShowAddItem(false)} aria-label="Close"><X size={18} /></button>
             </div>
@@ -380,17 +455,29 @@ export default function Page() {
                   placeholder="e.g. Stage lighting & audio"
                 />
               </label>
-              <label className="text-xs font-semibold text-slate-600">
-                Total cost (₹)
-                <input
-                  required
-                  type="number"
-                  value={newItemCost}
-                  onChange={(e) => setNewItemCost(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-500"
-                  placeholder="0"
-                />
-              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Total cost (₹)
+                  <input
+                    required
+                    type="number"
+                    value={newItemCost}
+                    onChange={(e) => setNewItemCost(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-500"
+                    placeholder="0"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-600">
+                  Advance paid (₹)
+                  <input
+                    type="number"
+                    value={newItemAdvance}
+                    onChange={(e) => setNewItemAdvance(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-500"
+                    placeholder="0"
+                  />
+                </label>
+              </div>
               <label className="text-xs font-semibold text-slate-600">
                 Category
                 <select
@@ -404,7 +491,7 @@ export default function Page() {
                 </select>
               </label>
               <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition">
-                Save expense
+                Save to Database
               </button>
             </form>
           </div>
@@ -418,7 +505,7 @@ export default function Page() {
             <div className="mb-5 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold">Add Staff Member</h2>
-                <p className="mt-1 text-xs text-slate-500">Provide credentials for the staff account.</p>
+                <p className="mt-1 text-xs text-slate-500">Save staff directly to Supabase.</p>
               </div>
               <button onClick={() => setShowAddStaffModal(false)} aria-label="Close"><X size={18} /></button>
             </div>
@@ -456,7 +543,7 @@ export default function Page() {
                 />
               </label>
               <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition">
-                Create Staff Account
+                Create & Save to Database
               </button>
             </form>
           </div>
