@@ -10,7 +10,9 @@ import {
   CircleDollarSign,
   ClipboardList,
   Clock,
+  Download,
   Eye,
+  FileSpreadsheet,
   Flower2,
   Globe,
   KeyRound,
@@ -18,10 +20,12 @@ import {
   LogOut,
   Mail,
   Menu,
+  MessageCircle,
   MoreHorizontal,
   Plus,
   Receipt,
   Settings,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   Trash2,
@@ -36,6 +40,8 @@ import {
   X,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 interface ExpenseItem {
   id?: string
@@ -43,6 +49,7 @@ interface ExpenseItem {
   category: string
   item: string
   vendor: string
+  vendor_phone?: string
   total: number
   advance: number
   unit?: string
@@ -68,6 +75,14 @@ interface EventData {
   created_at?: string
 }
 
+interface VendorData {
+  id: string
+  name: string
+  phone: string
+  category: string
+  created_at?: string
+}
+
 interface StaffData {
   id: string
   name: string
@@ -88,7 +103,6 @@ interface DeletionRequest {
   created_at: string
 }
 
-// আগের ক্যাটাগরিগুলোর সাথে শুধু 'Others' যুক্ত করা হয়েছে
 const expenseCategories = [
   { name: 'Decorations', icon: Flower2, color: 'bg-rose-100 text-rose-700' },
   { name: 'Venue', icon: LayoutDashboard, color: 'bg-sky-100 text-sky-700' },
@@ -128,11 +142,11 @@ export default function Page() {
   const [currentUser, setCurrentUser] = useState<{ id?: string; role: 'admin' | 'staff'; email: string; name: string } | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Navigation
-  const [currentView, setCurrentView] = useState<'dashboard' | 'events' | 'staff' | 'settings'>('dashboard')
+  // Navigation: Dashboard, Events, Staff, Vendors, Settings
+  const [currentView, setCurrentView] = useState<'dashboard' | 'events' | 'staff' | 'vendors' | 'settings'>('dashboard')
   const [showMobileNav, setShowMobileNav] = useState(false)
 
-  // Currency Setting
+  // Currency
   const [selectedCurrencyCode, setSelectedCurrencyCode] = useState('INR')
 
   // Events State
@@ -145,6 +159,13 @@ export default function Page() {
   const [newEventDate, setNewEventDate] = useState('')
   const [newEventStatus, setNewEventStatus] = useState<'Active' | 'Deactive' | 'Cancelled'>('Active')
 
+  // Vendors State
+  const [vendors, setVendors] = useState<VendorData[]>([])
+  const [showAddVendorModal, setShowAddVendorModal] = useState(false)
+  const [newVendorName, setNewVendorName] = useState('')
+  const [newVendorPhone, setNewVendorPhone] = useState('')
+  const [newVendorCategory, setNewVendorCategory] = useState('Decorations')
+
   // Dashboard Items (Expenses)
   const [activeCategory, setActiveCategory] = useState('All items')
   const [items, setItems] = useState<ExpenseItem[]>([])
@@ -153,6 +174,7 @@ export default function Page() {
   const [newItemCost, setNewItemCost] = useState('')
   const [newItemAdvance, setNewItemAdvance] = useState('')
   const [newItemCategory, setNewItemCategory] = useState('Decorations')
+  const [selectedVendorId, setSelectedVendorId] = useState('')
 
   // Unit, Quantity & Rate
   const [newItemUnit, setNewItemUnit] = useState('pcs')
@@ -207,7 +229,6 @@ export default function Page() {
     }
   }, [newItemQuantity, newItemRate, newItemUnit])
 
-  // Advance বাদ দিয়ে লাইভ ডিউ হিসাব
   const calculatedDue = useMemo(() => {
     const total = Number(newItemCost) || 0
     const adv = Number(newItemAdvance) || 0
@@ -232,6 +253,12 @@ export default function Page() {
         setSelectedDashboardEventId(firstActive.id)
       }
     }
+
+    const { data: vendorsData } = await supabase
+      .from('vendors')
+      .select('*')
+      .order('name', { ascending: true })
+    if (vendorsData) setVendors(vendorsData)
 
     const { data: staffData } = await supabase
       .from('staff')
@@ -301,6 +328,125 @@ export default function Page() {
       : currentEventItems.filter((item) => item.category === activeCategory)
   }, [currentEventItems, activeCategory])
 
+  // PDF Invoice Generation
+  const handleExportPDF = () => {
+    if (!targetedEvent) return
+    const doc = new jsPDF()
+
+    doc.setFontSize(18)
+    doc.text('ULLASH EVENT MANAGEMENT', 14, 20)
+    doc.setFontSize(11)
+    doc.setTextColor(100)
+    doc.text(`Event: ${targetedEvent.name} (${targetedEvent.category})`, 14, 28)
+    if (targetedEvent.date) doc.text(`Date: ${targetedEvent.date}`, 14, 34)
+
+    const tableRows = currentEventItems.map((item) => {
+      const bal = Number(item.total) - Number(item.advance)
+      const qtyStr = item.quantity && item.rate_per_unit ? `${item.quantity} ${item.unit || 'pcs'}` : '-'
+      return [
+        item.item,
+        item.category,
+        item.vendor,
+        qtyStr,
+        formatMoney(item.total),
+        formatMoney(item.advance),
+        formatMoney(bal),
+      ]
+    })
+
+    autoTable(doc, {
+      startY: 42,
+      head: [['Item Name', 'Category', 'Vendor', 'Quantity', 'Total', 'Paid', 'Due']],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: { fillColor: [15, 23, 42] },
+    })
+
+    const finalY = (doc as any).lastAutoTable.finalY + 10
+    doc.setFontSize(10)
+    doc.setTextColor(0)
+    doc.text(`Total Budget: ${formatMoney(totals.total)}`, 14, finalY)
+    doc.text(`Paid Amount: ${formatMoney(totals.advance)}`, 14, finalY + 6)
+    doc.text(`Remaining Balance: ${formatMoney(due)}`, 14, finalY + 12)
+
+    doc.save(`${targetedEvent.name.replace(/\s+/g, '_')}_Invoice.pdf`)
+  }
+
+  // Export CSV
+  const handleExportCSV = () => {
+    if (!targetedEvent || currentEventItems.length === 0) return
+    const headers = ['Item Name', 'Category', 'Vendor', 'Phone', 'Quantity', 'Unit', 'Rate', 'Total', 'Advance', 'Due']
+    const rows = currentEventItems.map((i) => [
+      `"${i.item}"`,
+      `"${i.category}"`,
+      `"${i.vendor}"`,
+      `"${i.vendor_phone || ''}"`,
+      i.quantity || 1,
+      i.unit || 'pcs',
+      i.rate_per_unit || 0,
+      i.total,
+      i.advance,
+      Number(i.total) - Number(i.advance),
+    ])
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n')
+    const encodedUri = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.setAttribute('href', encodedUri)
+    link.setAttribute('download', `${targetedEvent.name}_expenses.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  // Send WhatsApp Receipt
+  const handleShareWhatsApp = (item: ExpenseItem, lastAmount?: number) => {
+    const balance = Number(item.total) - Number(item.advance)
+    let msg = `*Payment Receipt - Ullash Event Management*\n`
+    msg += `Event: ${targetedEvent?.name || ''}\n`
+    msg += `Vendor/Item: ${item.item} (${item.vendor})\n`
+    if (lastAmount) msg += `Recent Paid: ${formatMoney(lastAmount)}\n`
+    msg += `Total Cost: ${formatMoney(item.total)}\n`
+    msg += `Total Advance Paid: ${formatMoney(item.advance)}\n`
+    msg += `*Remaining Balance: ${formatMoney(balance)}*\n\nThank you!`
+
+    const phone = item.vendor_phone ? item.vendor_phone.replace(/\D/g, '') : ''
+    const url = phone
+      ? `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`
+    window.open(url, '_blank')
+  }
+
+  // Add Vendor
+  const handleCreateVendor = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newVendorName) return
+
+    const { data, error } = await supabase.from('vendors').insert([
+      {
+        name: newVendorName,
+        phone: newVendorPhone,
+        category: newVendorCategory,
+      },
+    ]).select()
+
+    if (!error && data) {
+      setVendors((prev) => [...prev, data[0]])
+      setNewVendorName('')
+      setNewVendorPhone('')
+      setShowAddVendorModal(false)
+      alert('Vendor successfully registered!')
+    } else {
+      alert('Error creating vendor: ' + error?.message)
+    }
+  }
+
+  const handleDeleteVendor = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this vendor?')) return
+    const { error } = await supabase.from('vendors').delete().eq('id', id)
+    if (!error) setVendors((prev) => prev.filter((v) => v.id !== id))
+  }
+
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newItemName || !newItemCost || !targetedEvent) return
@@ -310,11 +456,14 @@ export default function Page() {
     const qtyVal = Number(newItemQuantity) || 1
     const rateVal = Number(newItemRate) || 0
 
+    const matchedVendor = vendors.find((v) => v.id === selectedVendorId)
+
     const newExpense: any = {
       event_id: targetedEvent.id,
       category: newItemCategory,
       item: newItemName,
-      vendor: currentUser?.name || 'General Vendor',
+      vendor: matchedVendor ? matchedVendor.name : (currentUser?.name || 'General Vendor'),
+      vendor_phone: matchedVendor?.phone || '',
       total: totalVal,
       advance: advVal,
       unit: newItemUnit,
@@ -333,7 +482,7 @@ export default function Page() {
           expense_id: createdItem.id,
           amount: totalVal,
           type: 'cost_added',
-          note: newItemUnit !== 'fixed' && rateVal > 0 
+          note: newItemUnit !== 'fixed' && rateVal > 0
             ? `${qtyVal} ${newItemUnit} @ ${formatMoney(rateVal)}/${newItemUnit}`
             : 'Opening Budget / Agreed Cost',
         })
@@ -357,6 +506,7 @@ export default function Page() {
       setNewItemQuantity(1)
       setNewItemRate('')
       setNewItemUnit('pcs')
+      setSelectedVendorId('')
       setNewItemCategory('Decorations')
       setShowAddItem(false)
     } else {
@@ -715,6 +865,14 @@ export default function Page() {
           </button>
 
           <button
+            onClick={() => { setCurrentView('vendors'); setViewingEventDetail(null); setSelectedStaff(null); }}
+            className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${currentView === 'vendors' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
+          >
+            <ClipboardList size={17} /> Vendors
+            <span className="ml-auto rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">{vendors.length}</span>
+          </button>
+
+          <button
             onClick={() => { setCurrentView('staff'); setViewingEventDetail(null); setSelectedStaff(null); }}
             className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${currentView === 'staff' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
           >
@@ -737,6 +895,15 @@ export default function Page() {
               className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
             >
               <UserPlus size={15} /> Add Staff Account
+            </button>
+          )}
+
+          {currentView === 'vendors' && (
+            <button
+              onClick={() => setShowAddVendorModal(true)}
+              className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800"
+            >
+              <Plus size={15} /> Add New Vendor
             </button>
           )}
 
@@ -798,7 +965,6 @@ export default function Page() {
               <h1 className="text-xl font-bold tracking-tight">Good day, {currentUser?.name}</h1>
             </div>
           </div>
-          <div></div>
         </header>
 
         {/* 1. DASHBOARD VIEW */}
@@ -845,12 +1011,28 @@ export default function Page() {
                       Category: {currentActiveEvent.category} {currentActiveEvent.date && `· Date: ${currentActiveEvent.date}`}
                     </p>
                   </div>
-                  <button
-                    onClick={() => setShowAddItem(true)}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                  >
-                    <Plus size={17} /> Add Expense to Event
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={handleExportPDF}
+                      title="Download Invoice PDF"
+                      className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition"
+                    >
+                      <Download size={15} /> Invoice PDF
+                    </button>
+                    <button
+                      onClick={handleExportCSV}
+                      title="Export CSV / Excel"
+                      className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition"
+                    >
+                      <FileSpreadsheet size={15} /> CSV
+                    </button>
+                    <button
+                      onClick={() => setShowAddItem(true)}
+                      className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                    >
+                      <Plus size={16} /> Add Expense
+                    </button>
+                  </div>
                 </section>
 
                 <section className="grid gap-4 sm:grid-cols-3">
@@ -876,7 +1058,7 @@ export default function Page() {
                       ))}
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[680px] text-left text-sm">
+                      <table className="w-full min-w-[700px] text-left text-sm">
                         <thead className="bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                           <tr>
                             <th className="px-5 py-3">Expense item</th>
@@ -891,7 +1073,7 @@ export default function Page() {
                           {filteredItems.length === 0 ? (
                             <tr>
                               <td colSpan={6} className="px-5 py-6 text-center text-xs text-slate-400">
-                                No expenses logged for this event. Click &ldquo;Add Expense to Event&rdquo; above!
+                                No expenses logged for this event. Click &ldquo;Add Expense&rdquo; above!
                               </td>
                             </tr>
                           ) : (
@@ -934,6 +1116,13 @@ export default function Page() {
                                   </td>
                                   <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                                     <div className="flex items-center justify-end gap-1">
+                                      <button
+                                        onClick={() => handleShareWhatsApp(item)}
+                                        title="Share Receipt on WhatsApp"
+                                        className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50 transition"
+                                      >
+                                        <MessageCircle size={16} />
+                                      </button>
                                       <button
                                         onClick={() => openKhatabookLedger(item)}
                                         title="Open Ledger"
@@ -985,7 +1174,69 @@ export default function Page() {
           </div>
         )}
 
-        {/* 2. EVENTS DIRECTORY & FULL VIEW */}
+        {/* 2. VENDORS DIRECTORY VIEW */}
+        {currentView === 'vendors' && (
+          <div className="mx-auto max-w-7xl px-5 py-7 sm:px-8">
+            <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+              <div>
+                <h2 className="text-3xl font-bold tracking-tight text-slate-950">Vendors Directory</h2>
+                <p className="mt-1 text-sm text-slate-500">Manage all decorators, caterers, chefs, sweet shops and their contact details.</p>
+              </div>
+              <button
+                onClick={() => setShowAddVendorModal(true)}
+                className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+              >
+                <Plus size={17} /> Add New Vendor
+              </button>
+            </section>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {vendors.length === 0 ? (
+                <div className="col-span-full rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-400">
+                  No vendors registered yet. Click &ldquo;Add New Vendor&rdquo; above.
+                </div>
+              ) : (
+                vendors.map((v) => (
+                  <div key={v.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-start justify-between">
+                        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-bold text-blue-600">
+                          {v.category}
+                        </span>
+                        <button
+                          onClick={() => handleDeleteVendor(v.id)}
+                          className="text-slate-300 hover:text-rose-600 transition"
+                          title="Delete Vendor"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      <h4 className="mt-3 font-bold text-slate-900 text-base">{v.name}</h4>
+                      <p className="text-xs text-slate-500 mt-1">{v.phone || 'No phone number'}</p>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                      {v.phone ? (
+                        <a
+                          href={`https://wa.me/${v.phone.replace(/\D/g, '')}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 hover:underline"
+                        >
+                          <MessageCircle size={14} /> WhatsApp Chat
+                        </a>
+                      ) : (
+                        <span className="text-xs text-slate-400">No WhatsApp</span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 3. EVENTS DIRECTORY & FULL VIEW */}
         {currentView === 'events' && (
           <div className="mx-auto max-w-7xl px-5 py-7 sm:px-8">
             {viewingEventDetail ? (
@@ -1017,7 +1268,12 @@ export default function Page() {
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-slate-400">Status:</span>
+                    <button
+                      onClick={handleExportPDF}
+                      className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Download size={14} /> PDF
+                    </button>
                     <select
                       value={viewingEventDetail.status}
                       onChange={(e) => handleUpdateEventStatus(viewingEventDetail.id, e.target.value as any)}
@@ -1044,10 +1300,6 @@ export default function Page() {
                 </section>
 
                 <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-                  <div className="border-b border-slate-100 px-5 py-4">
-                    <h3 className="font-bold text-sm">Ledger Records for this Event</h3>
-                    <p className="text-xs text-slate-400">Click any row to open detailed ledger history and record payments.</p>
-                  </div>
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 text-[11px] font-bold uppercase text-slate-400">
                       <tr>
@@ -1060,54 +1312,53 @@ export default function Page() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredItems.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="p-6 text-center text-xs text-slate-400">
-                            No expenses logged for this event. Click &ldquo;Add Expense&rdquo; above!
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredItems.map((item) => {
-                          const balance = Number(item.total) - Number(item.advance)
-                          return (
-                            <tr
-                              key={item.id}
-                              className="hover:bg-slate-50 cursor-pointer transition"
-                              onClick={() => openKhatabookLedger(item)}
-                            >
-                              <td className="px-5 py-4 font-semibold text-slate-800">{item.item}</td>
-                              <td className="px-5 py-4 text-xs text-slate-500">
-                                {item.quantity && item.rate_per_unit ? (
-                                  <span>{item.quantity} {item.unit || 'pcs'} × {formatMoney(item.rate_per_unit)}</span>
-                                ) : (
-                                  <span>Fixed</span>
-                                )}
-                              </td>
-                              <td className="px-5 py-4">{formatMoney(item.total)}</td>
-                              <td className="px-5 py-4 text-emerald-600 font-medium">{formatMoney(item.advance)}</td>
-                              <td className="px-5 py-4 font-bold text-rose-600">{formatMoney(balance)}</td>
-                              <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                                <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    onClick={() => openKhatabookLedger(item)}
-                                    title="Open Ledger"
-                                    className="rounded-lg p-1.5 text-slate-500 hover:bg-blue-50 hover:text-blue-600"
-                                  >
-                                    <Receipt size={16} />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteItem(item.id)}
-                                    title="Delete Item"
-                                    className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
-                                  >
-                                    <Trash2 size={16} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })
-                      )}
+                      {filteredItems.map((item) => {
+                        const balance = Number(item.total) - Number(item.advance)
+                        return (
+                          <tr
+                            key={item.id}
+                            className="hover:bg-slate-50 cursor-pointer transition"
+                            onClick={() => openKhatabookLedger(item)}
+                          >
+                            <td className="px-5 py-4 font-semibold text-slate-800">{item.item}</td>
+                            <td className="px-5 py-4 text-xs text-slate-500">
+                              {item.quantity && item.rate_per_unit ? (
+                                <span>{item.quantity} {item.unit || 'pcs'} × {formatMoney(item.rate_per_unit)}</span>
+                              ) : (
+                                <span>Fixed</span>
+                              )}
+                            </td>
+                            <td className="px-5 py-4">{formatMoney(item.total)}</td>
+                            <td className="px-5 py-4 text-emerald-600 font-medium">{formatMoney(item.advance)}</td>
+                            <td className="px-5 py-4 font-bold text-rose-600">{formatMoney(balance)}</td>
+                            <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => handleShareWhatsApp(item)}
+                                  title="WhatsApp"
+                                  className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50"
+                                >
+                                  <MessageCircle size={16} />
+                                </button>
+                                <button
+                                  onClick={() => openKhatabookLedger(item)}
+                                  title="Open Ledger"
+                                  className="rounded-lg p-1.5 text-slate-500 hover:bg-blue-50 hover:text-blue-600"
+                                >
+                                  <Receipt size={16} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteItem(item.id)}
+                                  title="Delete Item"
+                                  className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1128,73 +1379,43 @@ export default function Page() {
                 </section>
 
                 <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                  {events.length === 0 ? (
-                    <div className="col-span-full rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-400">
-                      No events found. Click &ldquo;Create Event&rdquo; above to register an event.
-                    </div>
-                  ) : (
-                    events.map((ev) => (
-                      <div key={ev.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-start justify-between">
-                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
-                              ev.status === 'Active' ? 'bg-emerald-50 text-emerald-600' :
-                              ev.status === 'Cancelled' ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {ev.status === 'Deactive' ? 'Completed' : ev.status}
-                            </span>
-                            <span className="text-xs text-slate-400">{ev.category}</span>
-                          </div>
-
-                          <h4 className="mt-4 text-lg font-bold text-slate-900">{ev.name}</h4>
-                          {ev.date && (
-                            <p className="mt-1 text-xs text-slate-500 flex items-center gap-1.5">
-                              <CalendarDays size={13} /> {ev.date}
-                            </p>
-                          )}
+                  {events.map((ev) => (
+                    <div key={ev.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-start justify-between">
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                            ev.status === 'Active' ? 'bg-emerald-50 text-emerald-600' :
+                            ev.status === 'Cancelled' ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {ev.status === 'Deactive' ? 'Completed' : ev.status}
+                          </span>
+                          <span className="text-xs text-slate-400">{ev.category}</span>
                         </div>
-
-                        <div className="mt-6 border-t border-slate-100 pt-4 flex flex-col gap-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-slate-400">Status:</span>
-                              <select
-                                value={ev.status}
-                                onChange={(e) => handleUpdateEventStatus(ev.id, e.target.value as any)}
-                                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold outline-none"
-                              >
-                                <option value="Active">Active</option>
-                                <option value="Deactive">Deactive (Completed)</option>
-                                <option value="Cancelled">Cancelled</option>
-                              </select>
-                            </div>
-
-                            <button
-                              onClick={() => handleDeleteEvent(ev.id, ev.name)}
-                              title="Delete event permanently from database"
-                              className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 transition"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-
-                          <button
-                            onClick={() => setViewingEventDetail(ev)}
-                            className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-50 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
-                          >
-                            <Eye size={14} className="text-slate-500" /> View Details & Ledgers
-                          </button>
-                        </div>
+                        <h4 className="mt-4 text-lg font-bold text-slate-900">{ev.name}</h4>
+                        {ev.date && (
+                          <p className="mt-1 text-xs text-slate-500 flex items-center gap-1.5">
+                            <CalendarDays size={13} /> {ev.date}
+                          </p>
+                        )}
                       </div>
-                    ))
-                  )}
+
+                      <div className="mt-6 border-t border-slate-100 pt-4 flex flex-col gap-3">
+                        <button
+                          onClick={() => setViewingEventDetail(ev)}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-50 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
+                        >
+                          <Eye size={14} className="text-slate-500" /> View Details & Ledgers
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* 3. STAFF MANAGEMENT VIEW */}
+        {/* 4. STAFF MANAGEMENT VIEW */}
         {currentView === 'staff' && (
           <div className="mx-auto max-w-7xl px-5 py-7 sm:px-8">
             <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -1212,187 +1433,53 @@ export default function Page() {
               )}
             </section>
 
-            {isAdmin && deletionRequests.filter((r) => r.status === 'pending').length > 0 && (
-              <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
-                <div className="flex items-center gap-2 text-sm font-bold text-amber-800">
-                  <ShieldAlert size={18} /> Document Deletion Requests Pending Approval
-                </div>
-                <div className="mt-3 flex flex-col gap-2">
-                  {deletionRequests
-                    .filter((r) => r.status === 'pending')
-                    .map((req) => (
-                      <div key={req.id} className="flex items-center justify-between rounded-xl bg-white p-3 shadow-sm">
-                        <span className="text-xs text-slate-700">
-                          Staff ID: <strong>{req.staff_id}</strong> requested deletion of <strong>{req.document_type}</strong>
-                        </span>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {staffList.map((st) => (
+                <div key={st.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-start justify-between">
+                    <div className="flex size-12 items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-bold text-slate-500">
+                      {st.photo_url ? (
+                        <img src={st.photo_url} alt={st.name} className="size-full object-cover" />
+                      ) : (
+                        st.name.charAt(0).toUpperCase()
+                      )}
+                    </div>
+                    <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${st.is_suspended ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                      {st.is_suspended ? 'Suspended' : 'Active'}
+                    </span>
+                  </div>
+
+                  <h4 className="mt-3 font-bold text-slate-900">{st.name}</h4>
+                  <p className="text-xs text-slate-400">{st.email}</p>
+
+                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                    <button
+                      onClick={() => setSelectedStaff(st)}
+                      className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
+                    >
+                      <Receipt size={14} /> Profile & Documents
+                    </button>
+                    {isAdmin && (
+                      <div className="flex items-center gap-1">
                         <button
-                          onClick={() => handleApproveDeletion(req)}
-                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                          onClick={() => handleToggleSuspend(st)}
+                          className={`rounded-lg p-1.5 text-xs font-semibold ${st.is_suspended ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
                         >
-                          Approve 1-Hour Window
+                          {st.is_suspended ? <UserCheck size={16} /> : <UserMinus size={16} />}
+                        </button>
+                        <button onClick={() => handleDeleteStaff(st.id)} className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50">
+                          <Trash2 size={16} />
                         </button>
                       </div>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {!selectedStaff ? (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {staffList.map((st) => (
-                  <div key={st.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex items-start justify-between">
-                      <div className="flex size-12 items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-bold text-slate-500">
-                        {st.photo_url ? (
-                          <img src={st.photo_url} alt={st.name} className="size-full object-cover" />
-                        ) : (
-                          st.name.charAt(0).toUpperCase()
-                        )}
-                      </div>
-                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${st.is_suspended ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                        {st.is_suspended ? 'Suspended' : 'Active'}
-                      </span>
-                    </div>
-
-                    <h4 className="mt-3 font-bold text-slate-900">{st.name}</h4>
-                    <p className="text-xs text-slate-400">{st.email}</p>
-
-                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                      <button
-                        onClick={() => setSelectedStaff(st)}
-                        className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
-                      >
-                        <Receipt size={14} /> Profile & Documents
-                      </button>
-                      {isAdmin && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => handleToggleSuspend(st)}
-                            title={st.is_suspended ? 'Unsuspend' : 'Suspend'}
-                            className={`rounded-lg p-1.5 text-xs font-semibold ${st.is_suspended ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                          >
-                            {st.is_suspended ? <UserCheck size={16} /> : <UserMinus size={16} />}
-                          </button>
-                          <button onClick={() => handleDeleteStaff(st.id)} className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50">
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div>
-                <button onClick={() => setSelectedStaff(null)} className="mb-5 flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900">
-                  <ArrowLeft size={16} /> Back to Staff Directory
-                </button>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-6">
-                    <div className="flex items-center gap-4">
-                      <div className="flex size-16 items-center justify-center overflow-hidden rounded-2xl bg-slate-100 font-bold text-slate-600 text-xl">
-                        {selectedStaff.photo_url ? (
-                          <img src={selectedStaff.photo_url} alt="" className="size-full object-cover" />
-                        ) : (
-                          selectedStaff.name.charAt(0)
-                        )}
-                      </div>
-                      <div>
-                        <h3 className="text-xl font-bold text-slate-900">{selectedStaff.name}</h3>
-                        <p className="text-xs text-slate-400">{selectedStaff.email}</p>
-                      </div>
-                    </div>
-                    <div>
-                      {isDeleteWindowActive(selectedStaff.delete_window_until) ? (
-                        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
-                          <Clock size={16} /> Deletion Window Open
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-500">
-                          <Clock size={16} /> Deletion Window Locked
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid gap-6 sm:grid-cols-2">
-                    <div className="rounded-xl border border-slate-200 p-4">
-                      <h4 className="font-bold text-sm text-slate-800">Profile Photo</h4>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        disabled={uploadingDoc}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0]
-                          if (file) handleFileUpload(file, 'photo', selectedStaff.id)
-                        }}
-                        className="mt-2 text-xs text-slate-500"
-                      />
-                      <div className="mt-4 flex items-center justify-between">
-                        {selectedStaff.photo_url && (
-                          <a href={selectedStaff.photo_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">View Photo</a>
-                        )}
-                        {selectedStaff.photo_url && (
-                          isAdmin || isDeleteWindowActive(selectedStaff.delete_window_until) ? (
-                            <button onClick={() => handleExecuteDeleteDoc(selectedStaff.id, 'photo')} className="text-xs font-semibold text-rose-600 hover:underline">
-                              Delete Photo
-                            </button>
-                          ) : (
-                            <button onClick={() => handleRequestDocDelete(selectedStaff.id, 'Photo')} className="text-xs font-semibold text-amber-600 hover:underline">
-                              Request Delete Window
-                            </button>
-                          )
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200 p-4">
-                      <h4 className="font-bold text-sm text-slate-800">Identity Document</h4>
-                      <div className="mt-3 flex gap-2">
-                        <input
-                          placeholder="Card Identifier"
-                          defaultValue={selectedStaff.id_card_number || ''}
-                          onChange={(e) => setIdCardNumberInput(e.target.value)}
-                          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs outline-none"
-                        />
-                        <button onClick={() => handleSaveIdCardNumber(selectedStaff.id)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">Save</button>
-                      </div>
-                      <input
-                        type="file"
-                        accept="image/*,.pdf"
-                        disabled={uploadingDoc}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0]
-                          if (file) handleFileUpload(file, 'id_card', selectedStaff.id)
-                        }}
-                        className="mt-3 text-xs text-slate-500"
-                      />
-                      <div className="mt-4 flex items-center justify-between">
-                        {selectedStaff.id_card_url && (
-                          <a href={selectedStaff.id_card_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">View Stored ID</a>
-                        )}
-                        {selectedStaff.id_card_url && (
-                          isAdmin || isDeleteWindowActive(selectedStaff.delete_window_until) ? (
-                            <button onClick={() => handleExecuteDeleteDoc(selectedStaff.id, 'id_card')} className="text-xs font-semibold text-rose-600 hover:underline">
-                              Delete ID
-                            </button>
-                          ) : (
-                            <button onClick={() => handleRequestDocDelete(selectedStaff.id, 'ID Card')} className="text-xs font-semibold text-amber-600 hover:underline">
-                              Request Delete Window
-                            </button>
-                          )
-                        )}
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            )}
+              ))}
+            </div>
           </div>
         )}
 
-        {/* 4. GENERAL SETTINGS VIEW */}
+        {/* 5. GENERAL SETTINGS VIEW */}
         {currentView === 'settings' && (
           <div className="mx-auto max-w-2xl px-5 py-7 sm:px-8 space-y-6">
             <div>
@@ -1424,16 +1511,214 @@ export default function Page() {
                     </option>
                   ))}
                 </select>
-                <p className="mt-2 text-xs text-slate-400">
-                  Active format: <strong>{currentCurrency.label}</strong>
-                </p>
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* MODAL 1: LEDGER PASSBOOK */}
+      {/* MODAL: ADD VENDOR */}
+      {showAddVendorModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Add New Vendor</h3>
+                <p className="text-xs text-slate-500">Save vendor details for fast billing & receipts.</p>
+              </div>
+              <button onClick={() => setShowAddVendorModal(false)}><X size={18} /></button>
+            </div>
+
+            <form onSubmit={handleCreateVendor} className="space-y-3">
+              <label className="block text-xs font-semibold text-slate-600">
+                Vendor Name / Business
+                <input
+                  required
+                  placeholder="e.g. Ghosh Sweets & Catering"
+                  value={newVendorName}
+                  onChange={(e) => setNewVendorName(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none"
+                />
+              </label>
+
+              <label className="block text-xs font-semibold text-slate-600">
+                WhatsApp / Phone Number
+                <input
+                  placeholder="e.g. 919876543210"
+                  value={newVendorPhone}
+                  onChange={(e) => setNewVendorPhone(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none"
+                />
+              </label>
+
+              <label className="block text-xs font-semibold text-slate-600">
+                Category
+                <select
+                  value={newVendorCategory}
+                  onChange={(e) => setNewVendorCategory(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                >
+                  {expenseCategories.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                type="submit"
+                className="w-full mt-2 rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition"
+              >
+                Save Vendor
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD EXPENSE */}
+      {showAddItem && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Add Expense to {targetedEvent?.name}</h2>
+                <p className="mt-1 text-xs text-slate-500">Auto calculation with unit & rate per unit.</p>
+              </div>
+              <button onClick={() => setShowAddItem(false)} aria-label="Close"><X size={18} /></button>
+            </div>
+
+            <form className="flex flex-col gap-4" onSubmit={handleAddItem}>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Item Name
+                  <input
+                    required
+                    value={newItemName}
+                    onChange={(e) => setNewItemName(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
+                    placeholder="e.g. Sweet / Rasgulla / Hall"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Assign Vendor (Optional)
+                  <select
+                    value={selectedVendorId}
+                    onChange={(e) => setSelectedVendorId(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
+                  >
+                    <option value="">General / None</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>{v.name} ({v.category})</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Category
+                  <select
+                    value={newItemCategory}
+                    onChange={(e) => setNewItemCategory(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
+                  >
+                    {expenseCategories.map((cat) => (
+                      <option key={cat.name} value={cat.name}>{cat.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Unit
+                  <select
+                    value={newItemUnit}
+                    onChange={(e) => setNewItemUnit(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium outline-none"
+                  >
+                    {unitOptions.map((u) => (
+                      <option key={u.value} value={u.value}>{u.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Quantity ({newItemUnit})
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={newItemUnit === 'fixed'}
+                    value={newItemQuantity}
+                    onChange={(e) => setNewItemQuantity(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="e.g. 50"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Rate / {newItemUnit} ({currentCurrency.symbol})
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={newItemUnit === 'fixed'}
+                    value={newItemRate}
+                    onChange={(e) => setNewItemRate(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="e.g. 15"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Total Cost ({currentCurrency.symbol})
+                  <input
+                    required
+                    type="number"
+                    value={newItemCost}
+                    onChange={(e) => setNewItemCost(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-bold bg-slate-50"
+                    placeholder="0"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Advance Paid ({currentCurrency.symbol})
+                  <input
+                    type="number"
+                    min="0"
+                    value={newItemAdvance}
+                    onChange={(e) => setNewItemAdvance(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium text-emerald-600"
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl bg-slate-50 p-3 border border-slate-100 text-xs">
+                <div>
+                  <span className="text-slate-400 font-medium block">Total Cost:</span>
+                  <span className="text-sm font-bold text-slate-800">{formatMoney(Number(newItemCost) || 0)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-400 font-medium block">Due Balance:</span>
+                  <span className={`text-sm font-bold ${calculatedDue > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {formatMoney(calculatedDue)}
+                  </span>
+                </div>
+              </div>
+
+              <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition shadow-sm">
+                Save Expense
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LEDGER PASSBOOK */}
       {selectedExpenseForLedger && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-xl rounded-3xl bg-white shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
@@ -1444,12 +1729,17 @@ export default function Page() {
                   <h2 className="text-xl font-bold text-slate-900">{selectedExpenseForLedger.item}</h2>
                   <p className="text-xs text-slate-500 mt-0.5">{selectedExpenseForLedger.category} · {selectedExpenseForLedger.vendor}</p>
                 </div>
-                <button
-                  onClick={() => setSelectedExpenseForLedger(null)}
-                  className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100"
-                >
-                  <X size={18} />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleShareWhatsApp(selectedExpenseForLedger)}
+                    className="flex items-center gap-1 rounded-xl bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+                  >
+                    <MessageCircle size={14} /> WhatsApp Receipt
+                  </button>
+                  <button onClick={() => setSelectedExpenseForLedger(null)} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100">
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4 grid grid-cols-3 gap-2 rounded-2xl bg-slate-50 p-3 text-center border border-slate-100">
@@ -1472,57 +1762,47 @@ export default function Page() {
 
             <div className="flex-1 overflow-y-auto p-6 space-y-3">
               <p className="text-xs font-bold uppercase text-slate-400">Transaction History</p>
-              {expenseLogs.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
-                  No transaction history recorded yet.
-                </div>
-              ) : (
-                expenseLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className={`flex items-center justify-between rounded-2xl border p-3.5 ${
-                      log.type === 'cost_added' ? 'border-rose-100 bg-rose-50/40' : 'border-emerald-100 bg-emerald-50/40'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`flex size-8 items-center justify-center rounded-xl ${log.type === 'cost_added' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                        {log.type === 'cost_added' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-slate-800">
-                          {log.note || (log.type === 'cost_added' ? 'Additional Cost Added' : 'Payment Given')}
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          {new Date(log.created_at).toLocaleDateString(currentCurrency.locale, {
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </p>
-                      </div>
+              {expenseLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className={`flex items-center justify-between rounded-2xl border p-3.5 ${
+                    log.type === 'cost_added' ? 'border-rose-100 bg-rose-50/40' : 'border-emerald-100 bg-emerald-50/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`flex size-8 items-center justify-center rounded-xl ${log.type === 'cost_added' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                      {log.type === 'cost_added' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
                     </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-right">
-                        <p className={`text-sm font-bold ${log.type === 'cost_added' ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          {log.type === 'cost_added' ? `+ ${formatMoney(log.amount)}` : `- ${formatMoney(log.amount)}`}
-                        </p>
-                        <span className="text-[10px] text-slate-400">
-                          {log.type === 'cost_added' ? 'Cost Added' : 'Payment Given'}
-                        </span>
-                      </div>
-                      <button
-                        onClick={() => handleDeleteLog(log)}
-                        title="Delete transaction"
-                        className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600 transition"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">
+                        {log.note || (log.type === 'cost_added' ? 'Additional Cost Added' : 'Payment Given')}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        {new Date(log.created_at).toLocaleDateString(currentCurrency.locale, {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </p>
                     </div>
                   </div>
-                ))
-              )}
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <p className={`text-sm font-bold ${log.type === 'cost_added' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {log.type === 'cost_added' ? `+ ${formatMoney(log.amount)}` : `- ${formatMoney(log.amount)}`}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteLog(log)}
+                      className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div className="border-t border-slate-100 bg-slate-50/80 p-4 grid grid-cols-2 gap-3">
@@ -1551,7 +1831,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL 1.1: ADD COST / PAY MONEY POPUP FORM */}
+      {/* POPUP: ADD COST / PAY MONEY */}
       {activeActionType && selectedExpenseForLedger && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
@@ -1563,11 +1843,8 @@ export default function Page() {
                 <h3 className="text-lg font-bold text-slate-900">
                   {activeActionType === 'cost_added' ? 'Add Extra Cost' : 'Record Payment Given'}
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">{selectedExpenseForLedger.item}</p>
               </div>
-              <button onClick={() => setActiveActionType(null)} className="rounded-full p-1 text-slate-400 hover:bg-slate-100">
-                <X size={18} />
-              </button>
+              <button onClick={() => setActiveActionType(null)}><X size={18} /></button>
             </div>
 
             <form onSubmit={handleAddTransaction} className="flex flex-col gap-4">
@@ -1580,17 +1857,17 @@ export default function Page() {
                   placeholder="0"
                   value={transactionAmount}
                   onChange={(e) => setTransactionAmount(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-slate-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none font-medium"
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none font-medium"
                 />
               </label>
 
               <label className="text-xs font-semibold text-slate-600">
                 Note / Description (Optional)
                 <input
-                  placeholder={activeActionType === 'cost_added' ? 'e.g. Extra 20 items added' : 'e.g. Paid via UPI / Cash'}
+                  placeholder="e.g. Paid via UPI / Cash"
                   value={transactionNote}
                   onChange={(e) => setTransactionNote(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-slate-500 font-medium"
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none font-medium"
                 />
               </label>
 
@@ -1598,7 +1875,7 @@ export default function Page() {
                 <button
                   type="button"
                   onClick={() => setActiveActionType(null)}
-                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600"
                 >
                   Cancel
                 </button>
@@ -1616,29 +1893,26 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL 2: CREATE EVENT */}
+      {/* MODAL: CREATE EVENT */}
       {showAddEventModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-5 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Create New Event</h2>
-                <p className="mt-1 text-xs text-slate-500">Provide event details, category and scheduling date.</p>
               </div>
-              <button onClick={() => setShowAddEventModal(false)} aria-label="Close">
-                <X size={18} />
-              </button>
+              <button onClick={() => setShowAddEventModal(false)}><X size={18} /></button>
             </div>
 
             <form className="flex flex-col gap-4" onSubmit={handleCreateEvent}>
               <label className="text-xs font-semibold text-slate-600">
-                Event Name / Title
+                Event Name
                 <input
                   required
-                  placeholder="e.g. Pradip Weds Soumili"
+                  placeholder="e.g. Rahul Weds Priya"
                   value={newEventName}
                   onChange={(e) => setNewEventName(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-slate-500 font-medium"
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none font-medium"
                 />
               </label>
 
@@ -1647,7 +1921,7 @@ export default function Page() {
                 <select
                   value={newEventCategory}
                   onChange={(e) => setNewEventCategory(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"
                 >
                   {eventCategories.map((c) => (
                     <option key={c} value={c}>{c}</option>
@@ -1662,27 +1936,11 @@ export default function Page() {
                   required
                   value={newEventDate}
                   onChange={(e) => setNewEventDate(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-500 font-medium"
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none"
                 />
               </label>
 
-              <label className="text-xs font-semibold text-slate-600">
-                Initial Status
-                <select
-                  value={newEventStatus}
-                  onChange={(e) => setNewEventStatus(e.target.value as any)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Deactive">Deactive (Completed)</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
-              </label>
-
-              <button
-                type="submit"
-                className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition"
-              >
+              <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition">
                 Create Event
               </button>
             </form>
@@ -1690,147 +1948,15 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL 3: ADD EXPENSE WITH UNIT & AUTO CALCULATION */}
-      {showAddItem && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="mb-5 flex items-start justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Add Expense to {targetedEvent?.name}</h2>
-                <p className="mt-1 text-xs text-slate-500">Auto calculation with unit & rate per unit.</p>
-              </div>
-              <button onClick={() => setShowAddItem(false)} aria-label="Close"><X size={18} /></button>
-            </div>
-
-            <form className="flex flex-col gap-4" onSubmit={handleAddItem}>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="text-xs font-semibold text-slate-600">
-                  Item Name
-                  <input
-                    required
-                    value={newItemName}
-                    onChange={(e) => setNewItemName(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                    placeholder="e.g. Sweet / Rasgulla / Hall"
-                  />
-                </label>
-
-                <label className="text-xs font-semibold text-slate-600">
-                  Category
-                  <select
-                    value={newItemCategory}
-                    onChange={(e) => setNewItemCategory(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
-                  >
-                    {expenseCategories.map((cat) => (
-                      <option key={cat.name} value={cat.name}>{cat.name}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              {/* Unit, Quantity, Rate per unit */}
-              <div className="grid grid-cols-3 gap-3">
-                <label className="text-xs font-semibold text-slate-600">
-                  Unit
-                  <select
-                    value={newItemUnit}
-                    onChange={(e) => setNewItemUnit(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium outline-none"
-                  >
-                    {unitOptions.map((u) => (
-                      <option key={u.value} value={u.value}>{u.label}</option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="text-xs font-semibold text-slate-600">
-                  Quantity ({newItemUnit})
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    disabled={newItemUnit === 'fixed'}
-                    value={newItemQuantity}
-                    onChange={(e) => setNewItemQuantity(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
-                    placeholder="e.g. 50"
-                  />
-                </label>
-
-                <label className="text-xs font-semibold text-slate-600">
-                  Rate / {newItemUnit} ({currentCurrency.symbol})
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    disabled={newItemUnit === 'fixed'}
-                    value={newItemRate}
-                    onChange={(e) => setNewItemRate(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
-                    placeholder="e.g. 15"
-                  />
-                </label>
-              </div>
-
-              {/* Total & Advance Paid */}
-              <div className="grid grid-cols-2 gap-3">
-                <label className="text-xs font-semibold text-slate-600">
-                  Total Cost ({currentCurrency.symbol})
-                  <input
-                    required
-                    type="number"
-                    value={newItemCost}
-                    onChange={(e) => setNewItemCost(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-bold bg-slate-50"
-                    placeholder="0"
-                  />
-                </label>
-                <label className="text-xs font-semibold text-slate-600">
-                  Advance Paid ({currentCurrency.symbol})
-                  <input
-                    type="number"
-                    min="0"
-                    value={newItemAdvance}
-                    onChange={(e) => setNewItemAdvance(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium text-emerald-600"
-                    placeholder="0"
-                  />
-                </label>
-              </div>
-
-              {/* Calculation Preview Banner */}
-              <div className="flex items-center justify-between rounded-xl bg-slate-50 p-3 border border-slate-100 text-xs">
-                <div>
-                  <span className="text-slate-400 font-medium block">Total Cost:</span>
-                  <span className="text-sm font-bold text-slate-800">{formatMoney(Number(newItemCost) || 0)}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-slate-400 font-medium block">Due Balance:</span>
-                  <span className={`text-sm font-bold ${calculatedDue > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                    {formatMoney(calculatedDue)}
-                  </span>
-                </div>
-              </div>
-
-              <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition shadow-sm">
-                Save Expense
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 4: ADD STAFF */}
+      {/* MODAL: ADD STAFF */}
       {showAddStaffModal && isAdmin && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-5 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold">Add Staff Member</h2>
-                <p className="mt-1 text-xs text-slate-500">Provide staff login access.</p>
               </div>
-              <button onClick={() => setShowAddStaffModal(false)} aria-label="Close"><X size={18} /></button>
+              <button onClick={() => setShowAddStaffModal(false)}><X size={18} /></button>
             </div>
             <form className="flex flex-col gap-4" onSubmit={handleCreateStaff}>
               <label className="text-xs font-semibold text-slate-600">
@@ -1839,8 +1965,7 @@ export default function Page() {
                   required
                   value={staffName}
                   onChange={(e) => setStaffName(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                  placeholder="e.g. Rahul Sharma"
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none"
                 />
               </label>
               <label className="text-xs font-semibold text-slate-600">
@@ -1850,8 +1975,7 @@ export default function Page() {
                   type="email"
                   value={staffEmail}
                   onChange={(e) => setStaffEmail(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                  placeholder="rahul@ullash.com"
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none"
                 />
               </label>
               <label className="text-xs font-semibold text-slate-600">
@@ -1861,8 +1985,7 @@ export default function Page() {
                   type="password"
                   value={staffPassword}
                   onChange={(e) => setStaffPassword(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                  placeholder="••••••••"
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none"
                 />
               </label>
               <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition">
@@ -1873,53 +1996,38 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL 5: ADMIN CREDENTIALS POPUP */}
+      {/* MODAL: ADMIN CREDENTIALS */}
       {showAdminCredentialsModal && isAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-5 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Admin Account Credentials</h2>
-                <p className="mt-1 text-xs text-slate-500">Update root administrator email and login password.</p>
               </div>
-              <button onClick={() => setShowAdminCredentialsModal(false)} aria-label="Close">
-                <X size={18} />
-              </button>
+              <button onClick={() => setShowAdminCredentialsModal(false)}><X size={18} /></button>
             </div>
 
             <form onSubmit={handleInitiateUpdateAdmin} className="flex flex-col gap-4">
               <label className="text-xs font-semibold text-slate-600">
                 New Admin Email
-                <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5">
-                  <Mail size={16} className="text-slate-400 shrink-0" />
-                  <input
-                    type="email"
-                    placeholder={currentUser?.email}
-                    value={newAdminEmail}
-                    onChange={(e) => setNewAdminEmail(e.target.value)}
-                    className="w-full text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                  />
-                </div>
+                <input
+                  type="email"
+                  placeholder={currentUser?.email}
+                  value={newAdminEmail}
+                  onChange={(e) => setNewAdminEmail(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none"
+                />
               </label>
-
               <label className="text-xs font-semibold text-slate-600">
                 New Admin Password
-                <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5">
-                  <KeyRound size={16} className="text-slate-400 shrink-0" />
-                  <input
-                    type="password"
-                    placeholder="Enter new strong password"
-                    value={newAdminPassword}
-                    onChange={(e) => setNewAdminPassword(e.target.value)}
-                    className="w-full text-sm text-slate-900 placeholder:text-slate-400 outline-none font-medium"
-                  />
-                </div>
+                <input
+                  type="password"
+                  value={newAdminPassword}
+                  onChange={(e) => setNewAdminPassword(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none"
+                />
               </label>
-
-              <button
-                type="submit"
-                className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition"
-              >
+              <button type="submit" className="mt-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition">
                 Save Credentials
               </button>
             </form>
@@ -1927,19 +2035,17 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL 6: RE-CONFIRMATION POPUP FOR ADMIN CREDENTIALS */}
+      {/* MODAL: CONFIRM CREDENTIALS */}
       {showConfirmCredentialModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl border border-slate-100">
             <div className="flex size-11 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 mb-4">
               <ShieldAlert size={22} />
             </div>
-
             <h3 className="text-base font-bold text-slate-900">Confirm Credential Update?</h3>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-              Are you sure you want to update administrator login details? You will be logged out and will need to sign in again with your new credentials.
+              Are you sure? You will be logged out immediately.
             </p>
-
             <div className="mt-5 flex items-center gap-2">
               <button
                 type="button"
