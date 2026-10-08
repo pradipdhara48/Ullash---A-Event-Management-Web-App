@@ -9,8 +9,9 @@ import {
   CalendarDays,
   CircleDollarSign,
   ClipboardList,
-  Clock,
   Download,
+  Edit,
+  Edit2,
   Eye,
   FileSpreadsheet,
   Flower2,
@@ -25,7 +26,6 @@ import {
   Plus,
   Receipt,
   Settings,
-  Share2,
   ShieldAlert,
   ShieldCheck,
   Trash2,
@@ -142,11 +142,8 @@ export default function Page() {
   const [currentUser, setCurrentUser] = useState<{ id?: string; role: 'admin' | 'staff'; email: string; name: string } | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Navigation: Dashboard, Events, Staff, Vendors, Settings
   const [currentView, setCurrentView] = useState<'dashboard' | 'events' | 'staff' | 'vendors' | 'settings'>('dashboard')
   const [showMobileNav, setShowMobileNav] = useState(false)
-
-  // Currency
   const [selectedCurrencyCode, setSelectedCurrencyCode] = useState('INR')
 
   // Events State
@@ -169,17 +166,28 @@ export default function Page() {
   // Dashboard Items (Expenses)
   const [activeCategory, setActiveCategory] = useState('All items')
   const [items, setItems] = useState<ExpenseItem[]>([])
+
+  // Add Expense Modal State
   const [showAddItem, setShowAddItem] = useState(false)
   const [newItemName, setNewItemName] = useState('')
   const [newItemCost, setNewItemCost] = useState('')
   const [newItemAdvance, setNewItemAdvance] = useState('')
   const [newItemCategory, setNewItemCategory] = useState('Decorations')
   const [selectedVendorId, setSelectedVendorId] = useState('')
-
-  // Unit, Quantity & Rate
   const [newItemUnit, setNewItemUnit] = useState('pcs')
   const [newItemQuantity, setNewItemQuantity] = useState<number | ''>(1)
   const [newItemRate, setNewItemRate] = useState<number | ''>('')
+
+  // Edit Expense Item Modal State
+  const [editingExpenseItem, setEditingExpenseItem] = useState<ExpenseItem | null>(null)
+  const [editItemName, setEditItemName] = useState('')
+  const [editItemCost, setEditItemCost] = useState('')
+  const [editItemAdvance, setEditItemAdvance] = useState('')
+  const [editItemCategory, setEditItemCategory] = useState('Decorations')
+  const [editSelectedVendorId, setEditSelectedVendorId] = useState('')
+  const [editItemUnit, setEditItemUnit] = useState('pcs')
+  const [editItemQuantity, setEditItemQuantity] = useState<number | ''>(1)
+  const [editItemRate, setEditItemRate] = useState<number | ''>('')
 
   // Ledger Modal States
   const [selectedExpenseForLedger, setSelectedExpenseForLedger] = useState<ExpenseItem | null>(null)
@@ -187,6 +195,11 @@ export default function Page() {
   const [transactionAmount, setTransactionAmount] = useState('')
   const [transactionNote, setTransactionNote] = useState('')
   const [activeActionType, setActiveActionType] = useState<'payment_made' | 'cost_added' | null>(null)
+
+  // Edit Inside Ledger Transaction Modal State
+  const [editingLog, setEditingLog] = useState<ExpenseLog | null>(null)
+  const [editLogAmount, setEditLogAmount] = useState('')
+  const [editLogNote, setEditLogNote] = useState('')
 
   // Staff State
   const [staffList, setStaffList] = useState<StaffData[]>([])
@@ -219,7 +232,7 @@ export default function Page() {
     return `${currentCurrency.symbol}${Number(value || 0).toLocaleString(currentCurrency.locale)}`
   }
 
-  // Auto Calculation: Quantity * Rate = Total Cost
+  // Auto Calculation for Add Item
   useEffect(() => {
     if (newItemUnit === 'fixed') return
     const q = Number(newItemQuantity) || 0
@@ -234,6 +247,22 @@ export default function Page() {
     const adv = Number(newItemAdvance) || 0
     return Math.max(0, total - adv)
   }, [newItemCost, newItemAdvance])
+
+  // Auto Calculation for Edit Item
+  useEffect(() => {
+    if (editItemUnit === 'fixed') return
+    const q = Number(editItemQuantity) || 0
+    const r = Number(editItemRate) || 0
+    if (editItemQuantity !== '' && editItemRate !== '') {
+      setEditItemCost(String(q * r))
+    }
+  }, [editItemQuantity, editItemRate, editItemUnit])
+
+  const calculatedEditDue = useMemo(() => {
+    const total = Number(editItemCost) || 0
+    const adv = Number(editItemAdvance) || 0
+    return Math.max(0, total - adv)
+  }, [editItemCost, editItemAdvance])
 
   const fetchData = async () => {
     const { data: expensesData } = await supabase
@@ -328,7 +357,7 @@ export default function Page() {
       : currentEventItems.filter((item) => item.category === activeCategory)
   }, [currentEventItems, activeCategory])
 
-  // PDF Invoice Generation
+  // PDF Export
   const handleExportPDF = () => {
     if (!targetedEvent) return
     const doc = new jsPDF()
@@ -372,7 +401,7 @@ export default function Page() {
     doc.save(`${targetedEvent.name.replace(/\s+/g, '_')}_Invoice.pdf`)
   }
 
-  // Export CSV
+  // CSV Export
   const handleExportCSV = () => {
     if (!targetedEvent || currentEventItems.length === 0) return
     const headers = ['Item Name', 'Category', 'Vendor', 'Phone', 'Quantity', 'Unit', 'Rate', 'Total', 'Advance', 'Due']
@@ -399,7 +428,7 @@ export default function Page() {
     document.body.removeChild(link)
   }
 
-  // Send WhatsApp Receipt
+  // WhatsApp Receipt
   const handleShareWhatsApp = (item: ExpenseItem, lastAmount?: number) => {
     const balance = Number(item.total) - Number(item.advance)
     let msg = `*Payment Receipt - Ullash Event Management*\n`
@@ -447,6 +476,7 @@ export default function Page() {
     if (!error) setVendors((prev) => prev.filter((v) => v.id !== id))
   }
 
+  // Add Expense
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newItemName || !newItemCost || !targetedEvent) return
@@ -514,9 +544,70 @@ export default function Page() {
     }
   }
 
+  // Open Full Expense Modal for Editing
+  const openEditExpenseModal = (item: ExpenseItem) => {
+    setEditingExpenseItem(item)
+    setEditItemName(item.item)
+    setEditItemCategory(item.category)
+    setEditItemUnit(item.unit || 'pcs')
+    setEditItemQuantity(item.quantity !== undefined && item.quantity !== null ? item.quantity : 1)
+    setEditItemRate(item.rate_per_unit !== undefined && item.rate_per_unit !== null ? item.rate_per_unit : '')
+    setEditItemCost(String(item.total || 0))
+    setEditItemAdvance(String(item.advance || 0))
+
+    const vMatch = vendors.find((v) => v.name === item.vendor)
+    setEditSelectedVendorId(vMatch ? vMatch.id : '')
+  }
+
+  // Update Full Expense
+  const handleUpdateExpense = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingExpenseItem?.id || !editItemName || !editItemCost) return
+
+    const totalVal = Number(editItemCost) || 0
+    const advVal = Number(editItemAdvance) || 0
+    const qtyVal = Number(editItemQuantity) || 1
+    const rateVal = Number(editItemRate) || 0
+
+    const matchedVendor = vendors.find((v) => v.id === editSelectedVendorId)
+
+    const updatedPayload = {
+      category: editItemCategory,
+      item: editItemName,
+      vendor: matchedVendor ? matchedVendor.name : (editingExpenseItem.vendor || 'General Vendor'),
+      vendor_phone: matchedVendor ? matchedVendor.phone : (editingExpenseItem.vendor_phone || ''),
+      total: totalVal,
+      advance: advVal,
+      unit: editItemUnit,
+      quantity: qtyVal,
+      rate_per_unit: rateVal,
+    }
+
+    const { error } = await supabase
+      .from('expenses')
+      .update(updatedPayload)
+      .eq('id', editingExpenseItem.id)
+
+    if (error) {
+      alert('Error updating expense: ' + error.message)
+      return
+    }
+
+    const updatedItem = { ...editingExpenseItem, ...updatedPayload }
+    setItems((prev) => prev.map((item) => (item.id === editingExpenseItem.id ? updatedItem : item)))
+    if (selectedExpenseForLedger?.id === editingExpenseItem.id) {
+      setSelectedExpenseForLedger(updatedItem)
+    }
+
+    setEditingExpenseItem(null)
+    alert('Expense successfully updated!')
+  }
+
+  // Open Ledger
   const openKhatabookLedger = async (item: ExpenseItem) => {
     setSelectedExpenseForLedger(item)
     setActiveActionType(null)
+    setEditingLog(null)
     setTransactionAmount('')
     setTransactionNote('')
 
@@ -531,6 +622,7 @@ export default function Page() {
     }
   }
 
+  // Add Transaction
   const handleAddTransaction = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedExpenseForLedger?.id || !activeActionType || !transactionAmount) return
@@ -580,6 +672,71 @@ export default function Page() {
     }
   }
 
+  // Open Edit Inside Ledger Transaction
+  const openEditLogModal = (log: ExpenseLog) => {
+    setEditingLog(log)
+    setEditLogAmount(String(log.amount))
+    setEditLogNote(log.note || '')
+  }
+
+  // Save Transaction Edit
+  const handleUpdateLog = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingLog || !selectedExpenseForLedger?.id || !editLogAmount) return
+
+    const newAmount = Number(editLogAmount)
+    if (newAmount <= 0) {
+      alert('Please enter a valid amount.')
+      return
+    }
+
+    const difference = newAmount - Number(editingLog.amount)
+
+    let updatedTotal = Number(selectedExpenseForLedger.total)
+    let updatedAdvance = Number(selectedExpenseForLedger.advance)
+
+    if (editingLog.type === 'cost_added') {
+      updatedTotal += difference
+    } else {
+      updatedAdvance += difference
+    }
+
+    const { error: expError } = await supabase
+      .from('expenses')
+      .update({ total: updatedTotal, advance: updatedAdvance })
+      .eq('id', selectedExpenseForLedger.id)
+
+    if (expError) {
+      alert('Error updating expense total: ' + expError.message)
+      return
+    }
+
+    const { error: logError } = await supabase
+      .from('expense_logs')
+      .update({
+        amount: newAmount,
+        note: editLogNote,
+      })
+      .eq('id', editingLog.id)
+
+    if (logError) {
+      alert('Error updating transaction: ' + logError.message)
+      return
+    }
+
+    const updatedExpense = { ...selectedExpenseForLedger, total: updatedTotal, advance: updatedAdvance }
+    setSelectedExpenseForLedger(updatedExpense)
+    setExpenseLogs((prev) =>
+      prev.map((l) => (l.id === editingLog.id ? { ...l, amount: newAmount, note: editLogNote } : l))
+    )
+    setItems((prev) => prev.map((item) => (item.id === selectedExpenseForLedger.id ? updatedExpense : item)))
+
+    setEditingLog(null)
+    setEditLogAmount('')
+    setEditLogNote('')
+  }
+
+  // Delete Transaction
   const handleDeleteLog = async (log: ExpenseLog) => {
     if (!selectedExpenseForLedger?.id) return
     if (!confirm('Are you sure you want to delete this transaction record?')) return
@@ -1046,7 +1203,7 @@ export default function Page() {
                     <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <h3 className="font-bold">Expense Overview (Ledger View)</h3>
-                        <p className="mt-1 text-xs text-slate-400">Click any row to open ledger history, add extra costs, or record payments</p>
+                        <p className="mt-1 text-xs text-slate-400">Click any row to open ledger history, edit details, or record payments</p>
                       </div>
                     </div>
                     <div className="flex gap-2 overflow-x-auto border-b border-slate-100 px-5 py-3">
@@ -1116,6 +1273,14 @@ export default function Page() {
                                   </td>
                                   <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                                     <div className="flex items-center justify-end gap-1">
+                                      {/* Edit Full Item Button */}
+                                      <button
+                                        onClick={() => openEditExpenseModal(item)}
+                                        title="Edit Full Expense Details"
+                                        className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800 transition"
+                                      >
+                                        <Edit size={16} />
+                                      </button>
                                       <button
                                         onClick={() => handleShareWhatsApp(item)}
                                         title="Share Receipt on WhatsApp"
@@ -1333,6 +1498,13 @@ export default function Page() {
                             <td className="px-5 py-4 font-bold text-rose-600">{formatMoney(balance)}</td>
                             <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => openEditExpenseModal(item)}
+                                  title="Edit Full Expense Details"
+                                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800 transition"
+                                >
+                                  <Edit size={16} />
+                                </button>
                                 <button
                                   onClick={() => handleShareWhatsApp(item)}
                                   title="WhatsApp"
@@ -1575,7 +1747,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL: ADD EXPENSE */}
+      {/* MODAL 1: ADD EXPENSE (NEW) */}
       {showAddItem && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
@@ -1718,7 +1890,163 @@ export default function Page() {
         </div>
       )}
 
-      {/* MODAL: LEDGER PASSBOOK */}
+      {/* MODAL 2: EDIT FULL EXPENSE ITEM */}
+      {editingExpenseItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-start justify-between">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Edit Mode</span>
+                <h2 className="text-lg font-bold text-slate-900">Edit Expense Details</h2>
+                <p className="mt-0.5 text-xs text-slate-500">Change unit, quantity, rate or vendor anytime.</p>
+              </div>
+              <button onClick={() => setEditingExpenseItem(null)} aria-label="Close"><X size={18} /></button>
+            </div>
+
+            <form className="flex flex-col gap-4" onSubmit={handleUpdateExpense}>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Item Name
+                  <input
+                    required
+                    value={editItemName}
+                    onChange={(e) => setEditItemName(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium"
+                    placeholder="Item name"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Assign Vendor
+                  <select
+                    value={editSelectedVendorId}
+                    onChange={(e) => setEditSelectedVendorId(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
+                  >
+                    <option value="">General / None</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>{v.name} ({v.category})</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Category
+                  <select
+                    value={editItemCategory}
+                    onChange={(e) => setEditItemCategory(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium"
+                  >
+                    {expenseCategories.map((cat) => (
+                      <option key={cat.name} value={cat.name}>{cat.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Unit
+                  <select
+                    value={editItemUnit}
+                    onChange={(e) => setEditItemUnit(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 font-medium outline-none"
+                  >
+                    {unitOptions.map((u) => (
+                      <option key={u.value} value={u.value}>{u.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Quantity ({editItemUnit})
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={editItemUnit === 'fixed'}
+                    value={editItemQuantity}
+                    onChange={(e) => setEditItemQuantity(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="Quantity"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs font-semibold text-slate-600">
+                  Rate / {editItemUnit} ({currentCurrency.symbol})
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={editItemUnit === 'fixed'}
+                    value={editItemRate}
+                    onChange={(e) => setEditItemRate(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="Rate"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Total Cost ({currentCurrency.symbol})
+                  <input
+                    required
+                    type="number"
+                    value={editItemCost}
+                    onChange={(e) => setEditItemCost(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-bold bg-slate-50"
+                    placeholder="0"
+                  />
+                </label>
+
+                <label className="text-xs font-semibold text-slate-600">
+                  Advance Paid ({currentCurrency.symbol})
+                  <input
+                    type="number"
+                    min="0"
+                    value={editItemAdvance}
+                    onChange={(e) => setEditItemAdvance(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none font-medium text-emerald-600"
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl bg-slate-50 p-3 border border-slate-100 text-xs">
+                <div>
+                  <span className="text-slate-400 font-medium block">Total Cost:</span>
+                  <span className="text-sm font-bold text-slate-800">{formatMoney(Number(editItemCost) || 0)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-400 font-medium block">Due Balance:</span>
+                  <span className={`text-sm font-bold ${calculatedEditDue > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {formatMoney(calculatedEditDue)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingExpenseItem(null)}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-slate-800 transition"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: LEDGER PASSBOOK */}
       {selectedExpenseForLedger && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-xl rounded-3xl bg-white shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
@@ -1788,15 +2116,27 @@ export default function Page() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <div className="text-right">
                       <p className={`text-sm font-bold ${log.type === 'cost_added' ? 'text-rose-600' : 'text-emerald-600'}`}>
                         {log.type === 'cost_added' ? `+ ${formatMoney(log.amount)}` : `- ${formatMoney(log.amount)}`}
                       </p>
                     </div>
+
+                    {/* Edit Transaction Entry Inside Ledger */}
+                    <button
+                      onClick={() => openEditLogModal(log)}
+                      title="Edit Transaction Record"
+                      className="rounded-lg p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600 transition"
+                    >
+                      <Edit2 size={15} />
+                    </button>
+
+                    {/* Delete Transaction */}
                     <button
                       onClick={() => handleDeleteLog(log)}
-                      className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
+                      title="Delete Transaction"
+                      className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600 transition"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -1886,6 +2226,64 @@ export default function Page() {
                   }`}
                 >
                   Confirm Entry
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP: EDIT INSIDE LEDGER TRANSACTION */}
+      {editingLog && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between">
+              <div>
+                <span className={`text-[10px] font-bold uppercase tracking-wider ${editingLog.type === 'cost_added' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  Edit Record ({editingLog.type === 'cost_added' ? 'Cost' : 'Payment'})
+                </span>
+                <h3 className="text-lg font-bold text-slate-900">Edit Transaction Entry</h3>
+              </div>
+              <button onClick={() => setEditingLog(null)}><X size={18} /></button>
+            </div>
+
+            <form onSubmit={handleUpdateLog} className="flex flex-col gap-4">
+              <label className="text-xs font-semibold text-slate-600">
+                Amount ({currentCurrency.symbol})
+                <input
+                  required
+                  autoFocus
+                  type="number"
+                  placeholder="0"
+                  value={editLogAmount}
+                  onChange={(e) => setEditLogAmount(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none font-medium"
+                />
+              </label>
+
+              <label className="text-xs font-semibold text-slate-600">
+                Note / Description
+                <input
+                  placeholder="e.g. Paid via UPI / Cash"
+                  value={editLogNote}
+                  onChange={(e) => setEditLogNote(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none font-medium"
+                />
+              </label>
+
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingLog(null)}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-slate-800 transition"
+                >
+                  Save Changes
                 </button>
               </div>
             </form>
